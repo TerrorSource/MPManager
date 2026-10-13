@@ -1,0 +1,47 @@
+version: "3"
+services:
+  mpmanager:
+    container_name: mpmanager
+    image: ghcr.io/terrorsource/mpmanager:latest
+    init: true
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "8096:8080"                    # de pagina: http://<nas-ip>:8096
+    environment:
+      # --- alleen hier in te stellen ---
+      - TZ=Europe/Amsterdam            # de tijdzone waarin "actieve uren" gelezen wordt
+      - PUID=1000                      # draai als deze gebruiker, zodat de bestanden op de NAS van jou zijn
+      - PGID=1000
+      - WEB_USER=CHANGE_ME             # login voor de pagina: je typt er je Marktplaats-wachtwoord in
+      - WEB_PASSWORD=CHANGE_ME         # deze voorbeeldwaarde wordt geweigerd: niemand komt binnen tot je hem wijzigt
+      # - SECRET_KEY=                  # optioneel: eigen sleutel voor de versleutelde login (anders een bestand in /keys)
+      # - USER_AGENT=                  # optioneel: de user agent waarmee de tool zich bij Marktplaats meldt
+      #
+      # Alles hieronder is ALLEEN EEN BEGINWAARDE, voor zolang je op de pagina nog
+      # nooit Instellingen hebt opgeslagen. Daarna gelden de waarden van de pagina
+      # en doet aanpassen hier niets meer.
+      - DRY_RUN=true                   # proefmodus: zet pas uit als een proef er goed uitziet
+      - AUTO_BACKUP=true               # elk uur een backup van advertenties die er nog geen hebben
+      - AUTO_REPOST=false              # false = alleen wat je zelf aanklikt
+      - MAX_REPOSTS_PER_DAY=3
+      - MIN_ITEM_AGE_DAYS=14
+      - MIN_DELAY_SECONDS=120          # pauze tussen twee automatische herplaatsingen
+      - MAX_DELAY_SECONDS=600
+      - ACTIVE_HOURS=09:00-22:00
+      # Een aangeklikte herplaatsing wacht eerst een willekeurige tijd binnen dit bereik:
+      - MANUAL_DELAY_MIN_SECONDS=30
+      - MANUAL_DELAY_MAX_SECONDS=90
+      - BACKUP_RETENTION_DAYS=0        # 0 = backups nooit opruimen
+      # Telegram (zet NOTIFY_ON op failures of all om het aan te zetten):
+      - NOTIFY_ON=off
+      # - TELEGRAM_BOT_TOKEN=
+      # - TELEGRAM_CHAT_ID=
+    volumes:
+      # Je versleutelde Marktplaats-login (state.json), instellingen en geschiedenis.
+      - /share/CACHEDEV1_DATA/Docker/mpmanager/config:/config
+      # Backups van je advertenties: per advertentie een map met ad.json en photos/.
+      - /share/CACHEDEV1_DATA/Docker/mpmanager/backups:/data/backups
+      # De sleutel van die versleuteling. Bewust een aparte map: neem hem niet mee
+      # in dezelfde backup of cloud-sync als config.
+      - /share/CACHEDEV1_DATA/Docker/mpmanager/keys:/keys

@@ -1,0 +1,8 @@
+config/
+backups/
+_oldversions/
+compose.local.yml
+.DS_Store
+__pycache__/
+*.pyc
+.env

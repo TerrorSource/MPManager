@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MPManager</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1f2328; --mute:#6b7280; --line:#e3e1dc; --accent:#eda566; --blue:#2d6cdf; --red:#c0392b; --green:#1e7b4b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --card:#212327; --ink:#e8e8e6; --mute:#9aa0a8; --line:#33363b; --blue:#6aa0ff; --red:#ff7b6b; --green:#5fd08f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 16px; background:var(--card); border-bottom:3px solid var(--accent); }
+  header h1 { font-size:18px; margin:0 auto 0 0; }
+  .pill { padding:3px 10px; border-radius:99px; font-size:13px; border:1px solid var(--line); }
+  .pill.ok { color:var(--green); } .pill.bad { color:var(--red); } .pill.dry { background:var(--accent); color:#222; border-color:transparent; }
+  nav { display:flex; gap:4px; padding:10px 16px 0; flex-wrap:wrap; }
+  nav button { background:none; border:0; border-bottom:2px solid transparent; padding:8px 12px; font:inherit; color:var(--mute); cursor:pointer; }
+  nav button.on { color:var(--ink); border-color:var(--accent); font-weight:600; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  button.b { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.b.primary { background:var(--blue); color:#fff; border-color:transparent; }
+  button.b.danger { color:var(--red); }
+  button.b.on { border-color:var(--accent); background:var(--accent); color:#222; }
+  button.b.small { padding:2px 8px; font-size:13px; }
+  button.b:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; }
+  .row img { width:72px; height:72px; object-fit:cover; border-radius:6px; background:var(--line); flex:none; }
+  .row .info { flex:1; min-width:0; }
+  .row .info b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .info small, .mute { color:var(--mute); }
+  .row .acts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
+  .card h3 { margin-top:0; }
+  .fields { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text], input[type=email], input[type=password], input[type=number], input:not([type]), select {
+    font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  .fields input { min-width:210px; }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 150px; gap:8px 12px; align-items:center; max-width:560px; }
+  .grid input:not([type=checkbox]), .grid select { width:100%; }
+  .grid input[type=checkbox] { justify-self:start; }
+  textarea { width:100%; min-height:90px; font:13px ui-monospace, monospace; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:12.5px; white-space:pre-wrap; }
+  .job { display:flex; gap:10px; align-items:center; padding:4px 0; font-size:14px; flex-wrap:wrap; }
+  .job .st { min-width:92px; font-weight:600; }
+  .st.klaar { color:var(--green); } .st.mislukt { color:var(--red); } .st.geannuleerd { color:var(--mute); }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#222; color:#fff; padding:10px 16px; border-radius:8px; max-width:90vw; display:none; z-index:9; }
+  #toast.err { background:var(--red); }
+  @media (max-width:640px) { .row { flex-wrap:wrap; } .row .acts { width:100%; justify-content:flex-start; } .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>MPManager</h1>
+  <span id="pDry" class="pill dry" hidden>Proefmodus: er wordt niets geplaatst of verwijderd</span>
+  <span id="pAuto" class="pill" hidden></span>
+  <span id="pLogin" class="pill">…</span>
+  {% if web_login %}<a href="/logout">Afmelden</a>{% endif %}
+</header>
+<nav>
+  <button data-tab="ads" class="on">Advertenties</button>
+  <button data-tab="backups">Backups</button>
+  <button data-tab="history">Geschiedenis</button>
+  <button data-tab="log">Log</button>
+  <button data-tab="settings">Instellingen</button>
+</nav>
+<main>
+  <div class="card" id="jobsCard" hidden>
+    <b>Wachtrij</b>
+    <div id="jobsList"></div>
+  </div>
+
+  <section id="ads">
+    <div class="bar">
+      <button class="b" onclick="loadAds()">Vernieuwen</button>
+      <button class="b primary" onclick="backupAll(this)">Alles backuppen</button>
+      <span id="adsInfo" class="mute"></span>
+    </div>
+    <div id="adsList"></div>
+  </section>
+  <section id="backups" hidden><div id="backupList"></div></section>
+  <section id="history" hidden><div id="historyList"></div></section>
+  <section id="log" hidden><pre id="logBox"></pre></section>
+
+  <section id="settings" hidden>
+    <div class="card">
+      <h3>Marktplaats-login</h3>
+      <p id="loginState"></p>
+      <form id="loginForm" onsubmit="doLogin(event)">
+        <p>Log in met je Marktplaats-account. De sms-code wordt alleen doorgegeven aan Marktplaats en nooit bewaard.</p>
+        <div class="fields">
+          <input id="email" type="email" placeholder="E-mailadres" autocomplete="username" required>
+          <input id="password" type="password" placeholder="Wachtwoord" autocomplete="current-password" required>
+          <button class="b primary" id="loginBtn">Inloggen</button>
+        </div>
+        <p><label><input type="checkbox" id="remember"> Wachtwoord versleuteld bewaren, zodat de tool zelf opnieuw inlogt als de sessie verloopt</label></p>
+      </form>
+      <form id="codeForm" onsubmit="doCode(event)" hidden>
+        <p id="codeText"></p>
+        <div class="fields">
+          <input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code uit de sms" required>
+          <button class="b primary" id="codeBtn">Bevestigen</button>
+          <button class="b" type="button" onclick="resendCode(this)">Nieuwe code sturen</button>
+          <button class="b" type="button" onclick="showLogin()">Annuleren</button>
+        </div>
+      </form>
+      <div class="bar" style="margin-top:12px">
+        <button class="b danger" onclick="logout()">Login wissen</button>
+        <button class="b" id="forgetBtn" onclick="forgetPassword()" hidden>Bewaard wachtwoord wissen</button>
+      </div>
+      <details style="margin-top:8px">
+        <summary>Lukt inloggen niet? Cookies uit je browser plakken</summary>
+        <p>Log in op marktplaats.nl, open de ontwikkelaarstools (F12) → <i>Application</i> → <i>Cookies</i> → <i>https://www.marktplaats.nl</i>
+          en kopieer <code>MpSecurity</code> en <code>MpSslSecurity</code>. Plak ze hieronder als <code>naam=waarde</code>, één per regel.</p>
+        <textarea id="cookies" placeholder="MpSecurity=…&#10;MpSslSecurity=…" autocomplete="off" spellcheck="false"></textarea>
+        <div class="bar" style="margin-top:8px">
+          <button class="b primary" onclick="saveCookies(this)">Opslaan en testen</button>
+        </div>
+      </details>
+    </div>
+
+    <form class="card" onsubmit="saveSettings(event)">
+      <h3>Werking</h3>
+      <div class="grid">
+        <label for="s_dry_run">Proefmodus: herplaatsen en verwijderen alleen voorbereiden</label><input type="checkbox" id="s_dry_run">
+        <label for="s_manual_delay_min">Wachttijd na een klik op Herplaatsen, Plaatsen of Verwijderen: minimaal (seconden)</label><input type="number" min="0" id="s_manual_delay_min">
+        <label for="s_manual_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_manual_delay_max">
+      </div>
+
+      <h3 style="margin-top:20px">Automatisch backuppen</h3>
+      <div class="grid">
+        <label for="s_auto_backup">Elk uur een backup maken van advertenties die er nog geen hebben</label><input type="checkbox" id="s_auto_backup">
+        <label for="s_backup_retention_days">Backups van advertenties die niet meer online staan opruimen na (dagen, 0 = nooit)</label><input type="number" min="0" id="s_backup_retention_days">
+      </div>
+
+      <h3 style="margin-top:20px">Automatisch herplaatsen</h3>
+      <p class="mute">Slaat advertenties over die zijn uitgesloten, gereserveerd zijn of een bod hebben. Begin klein: veel herplaatsen kan Marktplaats als misbruik zien.</p>
+      <div class="grid">
+        <label for="s_auto_repost">Automatisch herplaatsen aan</label><input type="checkbox" id="s_auto_repost">
+        <label for="s_min_age_days">Alleen advertenties die minstens zo lang online staan (dagen)</label><input type="number" min="0" id="s_min_age_days">
+        <label for="s_max_per_day">Maximaal aantal per dag</label><input type="number" min="0" id="s_max_per_day">
+        <label for="s_active_hours">Alleen tussen (uu:mm-uu:mm)</label><input id="s_active_hours" pattern="\d\d:\d\d-\d\d:\d\d">
+        <label for="s_auto_delay_min">Pauze tussen twee herplaatsingen: minimaal (seconden)</label><input type="number" min="0" id="s_auto_delay_min">
+        <label for="s_auto_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_auto_delay_max">
+      </div>
+
+      <h3 style="margin-top:20px">Telegram-meldingen</h3>
+      <div class="grid">
+        <label for="s_notify_on">Melden</label>
+        <select id="s_notify_on"><option value="off">Uit</option><option value="failures">Alleen als iets mislukt</option><option value="all">Mislukt en herplaatst</option></select>
+        <label for="s_telegram_bot_token">Bot-token <span id="tokenState" class="mute"></span></label><input type="password" id="s_telegram_bot_token" autocomplete="off" placeholder="leeg = ongewijzigd">
+        <label for="s_telegram_chat_id">Chat-id</label><input id="s_telegram_chat_id" autocomplete="off">
+      </div>
+      <div class="bar" style="margin-top:16px">
+        <button class="b primary" id="saveBtn">Instellingen opslaan</button>
+        <button class="b" type="button" onclick="testTelegram(this)">Testbericht sturen</button>
+      </div>
+    </form>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when = ts => ts ? new Date(ts * 1000).toLocaleString('nl-NL', {dateStyle:'short', timeStyle:'short'}) : '';
+const euro = c => '€ ' + (c / 100).toLocaleString('nl-NL', {minimumFractionDigits:2});
+const SETTING_IDS = ['dry_run','auto_backup','auto_repost','min_age_days','max_per_day','active_hours','auto_delay_min',
+                     'auto_delay_max','manual_delay_min','manual_delay_max','backup_retention_days','telegram_chat_id','notify_on'];
+let dryRun = true, ads = [];
+
+function toast(msg, err) {
+  const t = $('toast'); t.textContent = msg; t.className = err ? 'err' : ''; t.style.display = 'block';
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = 'none', err ? 9000 : 4000);
+}
+async function api(path, method = 'GET', body) {
+  const headers = {'X-Requested-With': 'mpmanager'};
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.web_login) { location.href = '/login'; throw new Error(data.error); }
+  if (!res.ok) { if (data.auth) status().catch(() => {}); throw new Error(data.error || ('Fout ' + res.status)); }
+  return data;
+}
+async function busy(btn, fn) {
+  if (btn) btn.disabled = true;
+  try { await fn(); } catch (e) { toast(e.message, true); } finally { if (btn) btn.disabled = false; }
+}
+function priceText(a) {
+  if (a.price_type === 'FREE') return 'Gratis';
+  if (a.price_type === 'SEE_DESCRIPTION') return 'Zie omschrijving';
+  if (a.price_cents == null) return 'Bieden';
+  return (a.price_type === 'MIN_BID' ? 'Bieden vanaf ' : '') + euro(a.price_cents);
+}
+
+async function status() {
+  const s = await api('/api/status');
+  dryRun = s.dry_run; $('pDry').hidden = !dryRun;
+  $('pAuto').hidden = !s.auto_repost;
+  $('pAuto').textContent = `Automatisch herplaatsen: ${s.reposts_today} van ${s.max_per_day} vandaag`;
+  $('pLogin').textContent = s.logged_in ? 'Ingelogd op Marktplaats' : 'Niet ingelogd';
+  $('pLogin').className = 'pill ' + (s.logged_in ? 'ok' : 'bad');
+  $('loginState').textContent = (s.state_error ? s.state_error + ' ' : '') + (s.logged_in ? 'Je bent ingelogd.' : 'Je bent niet ingelogd.')
+    + (s.saved_email ? ' Het wachtwoord van ' + s.saved_email + ' is versleuteld bewaard.' : ' Er is geen wachtwoord bewaard.');
+  $('forgetBtn').hidden = !s.saved_email;
+  return s;
+}
+
+// ---- wachtrij ----
+let jobTimer = null, lastActive = 0;
+async function loadJobs() {
+  let jobs = [];
+  try { jobs = (await api('/api/jobs')).jobs; } catch (e) { return; }
+  const now = Date.now() / 1000;
+  const active = jobs.filter(j => j.status === 'wacht' || j.status === 'bezig');
+  const recent = jobs.filter(j => j.finished && now - j.finished < 600 || j.status === 'geannuleerd' && now - j.created < 600);
+  const show = [...active, ...recent.filter(j => !active.includes(j))].slice(0, 12);
+  $('jobsCard').hidden = !show.length;
+  $('jobsList').innerHTML = show.map(j => {
+    const wait = Math.max(0, Math.round(j.run_at - now));
+    const st = j.status === 'wacht' ? (wait ? `wacht ${wait < 90 ? wait + ' s' : Math.round(wait / 60) + ' min'}` : 'wacht') : j.status;
+    return `<div class="job"><span class="st ${esc(j.status)}">${esc(st)}</span><span>${esc(j.label)}: ${esc(j.title)}</span>
+      <span class="mute">${esc(j.message)}</span>
+      ${j.status === 'wacht' ? `<button class="b small" onclick="cancelJob(${j.id})">Annuleren</button>` : ''}</div>`;
+  }).join('');
+  if (lastActive && !active.length) { loaders[currentTab]?.().catch(() => {}); status().catch(() => {}); }
+  lastActive = active.length;
+  clearTimeout(jobTimer); jobTimer = setTimeout(loadJobs, active.length ? 2000 : 15000);
+}
+const cancelJob = id => busy(null, async () => { await api(`/api/jobs/${id}/cancel`, 'POST'); loadJobs(); });
+const queue = async (path, body) => { const j = await api(path, 'POST', body || {}); loadJobs(); return j; };
+
+// ---- advertenties ----
+async function loadAds() {
+  $('adsInfo').textContent = 'Laden…';
+  try {
+    ads = (await api('/api/ads')).ads;
+    $('adsInfo').textContent = ads.length + ' advertenties';
+    $('adsList').innerHTML = ads.map((a, i) => `
+      <div class="row">
+        <img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+        <div class="info">
+          <b><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a></b>
+          <small>${esc(priceText(a))} · ${esc(a.category)} · ${esc(a.views)}× bekeken${a.age_days != null ? ' · ' + a.age_days + ' dagen online' : ''} · verloopt ${esc(a.expires)}</small><br>
+          <small>${a.backed_up_at ? 'Backup van ' + when(a.backed_up_at) : 'Nog geen backup'}${a.auto_skip ? ' · automatisch herplaatsen slaat over: ' + esc(a.auto_skip) : ''}</small>
+        </div>
+        <div class="acts">
+          <button class="b" onclick="backup(${i}, this)">Backup</button>
+          <button class="b primary" onclick="repost(${i}, this)">Herplaatsen</button>
+          <button class="b ${a.excluded ? 'on' : ''}" title="Automatisch herplaatsen slaat uitgesloten advertenties over" onclick="exclude(${i}, this)">${a.excluded ? 'Uitgesloten' : 'Uitsluiten'}</button>
+          <button class="b danger" onclick="removeAd(${i}, this)">Verwijderen</button>
+        </div>
+      </div>`).join('') || '<p>Geen advertenties gevonden.</p>';
+  } catch (e) { $('adsInfo').textContent = ''; $('adsList').innerHTML = `<p>${esc(e.message)}</p>`; }
+}
+const backup = (i, btn) => busy(btn, () => queue(`/api/ads/${ads[i].item_id}/backup`, {title: ads[i].title}));
+const backupAll = btn => busy(btn, async () => { const r = await queue('/api/backup-all'); toast(`${r.queued} backups in de wachtrij`); });
+const repost = (i, btn) => busy(btn, async () => {
+  if (!dryRun && !confirm(`"${ads[i].title}" wordt opnieuw geplaatst en de oude daarna verwijderd. Biedingen, bewaarders en weergaven vervallen. Doorgaan?`)) return;
+  await queue(`/api/ads/${ads[i].item_id}/repost`, {title: ads[i].title});
+  toast(dryRun ? 'Proefmodus: wordt alleen voorbereid' : 'In de wachtrij gezet; annuleren kan nog even');
+});
+const removeAd = (i, btn) => busy(btn, async () => {
+  if (!dryRun && !confirm(`"${ads[i].title}" van Marktplaats verwijderen?`)) return;
+  await queue(`/api/ads/${ads[i].item_id}/delete`, {title: ads[i].title});
+});
+const exclude = (i, btn) => busy(btn, async () => {
+  await api(`/api/ads/${ads[i].item_id}/exclude`, 'POST', {excluded: !ads[i].excluded}); loadAds();
+});
+
+// ---- backups, geschiedenis, log ----
+async function loadBackups() {
+  const {backups} = await api('/api/backups');
+  $('backupList').innerHTML = backups.map(b => `
+    <div class="row">
+      <img src="/api/backups/${b.item_id}/photo/1" alt="" loading="lazy">
+      <div class="info">
+        <b>${esc(b.title)}</b>
+        <small>${esc(b.price)} · ${esc(b.category)} · ${b.photos.length} foto's · ${esc(b.item_id)}</small><br>
+        <small>Backup van ${when(b.backed_up_at)}${b.reposted_to ? ' · opnieuw geplaatst als ' + esc(b.reposted_to) : ''}${b.partial ? ' · onvolledig' : ''}</small>
+      </div>
+      <div class="acts">
+        <button class="b" onclick="location.href='/api/backups/${b.item_id}/download'">Zip</button>
+        <button class="b primary" ${b.partial ? 'disabled' : ''} onclick="placeBackup('${b.item_id}', this)">Plaatsen</button>
+        <button class="b danger" onclick="dropBackup('${b.item_id}', this)">Backup wissen</button>
+      </div>
+    </div>`).join('') || '<p>Nog geen backups.</p>';
+}
+const placeBackup = (id, btn) => busy(btn, async () => {
+  if (!dryRun && !confirm('Deze backup als nieuwe advertentie op Marktplaats plaatsen?')) return;
+  await queue(`/api/backups/${id}/place`);
+});
+const dropBackup = (id, btn) => busy(btn, async () => {
+  if (!confirm('Deze backup van schijf wissen? Op Marktplaats verandert niets.')) return;
+  await api(`/api/backups/${id}`, 'DELETE'); loadBackups();
+});
+async function loadHistory() {
+  const {history} = await api('/api/history');
+  $('historyList').innerHTML = history.map(h => `
+    <div class="row"><div class="info"><b>${esc(h.title)}</b>
+      <small>${when(h.ts)} · ${esc(h.action)} · ${esc(h.old_id || '')}${h.new_id ? ' → ' + esc(h.new_id) : ''}</small></div></div>`).join('') || '<p>Nog niets gebeurd.</p>';
+}
+async function loadLog() { $('logBox').textContent = (await api('/api/log')).lines.join('\n') || 'Leeg.'; }
+
+// ---- instellingen ----
+async function loadSettings() {
+  await status();
+  const s = await api('/api/settings');
+  for (const k of SETTING_IDS) { const el = $('s_' + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = s[k]; }
+  $('tokenState').textContent = s.telegram_token_set ? '(versleuteld bewaard)' : '(nog niet ingesteld)';
+}
+const saveSettings = ev => { ev.preventDefault(); busy($('saveBtn'), async () => {
+  const data = {};
+  for (const k of SETTING_IDS) { const el = $('s_' + k); data[k] = el.type === 'checkbox' ? el.checked : el.value; }
+  if ($('s_telegram_bot_token').value) data.telegram_bot_token = $('s_telegram_bot_token').value;
+  if (data.auto_repost && !data.dry_run && !confirm('Automatisch herplaatsen staat aan en proefmodus uit: de tool gaat zelf advertenties vervangen. Doorgaan?')) return;
+  const r = await api('/api/settings', 'POST', data);
+  $('s_telegram_bot_token').value = '';
+  toast(r.refused.length ? 'Opgeslagen, behalve ongeldige waarde bij: ' + r.refused.join(', ') : 'Instellingen opgeslagen', r.refused.length > 0);
+  loadSettings();
+}); };
+const testTelegram = btn => busy(btn, async () => { await api('/api/notify/test', 'POST'); toast('Testbericht verstuurd'); });
+
+function showLogin() { $('codeForm').hidden = true; $('loginForm').hidden = false; $('code').value = ''; }
+function loggedIn() { $('password').value = ''; showLogin(); toast('Ingelogd op Marktplaats'); status(); }
+const doLogin = ev => { ev.preventDefault(); busy($('loginBtn'), async () => {
+  const r = await api('/api/login', 'POST', {email: $('email').value, password: $('password').value, remember: $('remember').checked});
+  if (r.logged_in) return loggedIn();
+  $('password').value = '';
+  $('codeText').textContent = 'Marktplaats heeft een sms-code gestuurd' + (r.phone ? ' naar ' + r.phone : '') + '. Vul die hier in.';
+  $('loginForm').hidden = true; $('codeForm').hidden = false; $('code').focus();
+}); };
+const doCode = ev => { ev.preventDefault(); busy($('codeBtn'), async () => {
+  await api('/api/login/code', 'POST', {code: $('code').value}); loggedIn();
+}); };
+const resendCode = btn => busy(btn, async () => { await api('/api/login/resend', 'POST'); toast('Nieuwe code gestuurd'); });
+const saveCookies = btn => busy(btn, async () => {
+  await api('/api/session', 'POST', {cookies: $('cookies').value});
+  $('cookies').value = ''; toast('Login werkt'); status();
+});
+const forgetPassword = () => busy(null, async () => { await api('/api/login/password', 'DELETE'); status(); });
+const logout = () => busy(null, async () => {
+  if (!confirm('De opgeslagen Marktplaats-login (sessie en bewaard wachtwoord) wissen?')) return;
+  await api('/api/session', 'DELETE'); status();
+});
+
+let currentTab = 'ads';
+const loaders = {ads: loadAds, backups: loadBackups, history: loadHistory, log: loadLog, settings: loadSettings};
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  currentTab = b.dataset.tab;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('main section').forEach(s => s.hidden = s.id !== currentTab);
+  busy(null, loaders[currentTab]);
+});
+status().then(s => s.logged_in ? loadAds() : document.querySelector('[data-tab=settings]').click()).catch(e => toast(e.message, true));
+loadJobs();
+</script>
+</body>
+</html>

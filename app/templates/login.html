@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MPManager – inloggen</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1f2328; --line:#e3e1dc; --accent:#eda566; --blue:#2d6cdf; --red:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17181a; --card:#212327; --ink:#e8e8e6; --line:#33363b; --blue:#6aa0ff; --red:#ff7b6b; } }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  form { background:var(--card); border:1px solid var(--line); border-top:3px solid var(--accent); border-radius:8px; padding:24px; width:min(340px, calc(100vw - 32px)); box-sizing:border-box; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  input { display:block; width:100%; box-sizing:border-box; font:inherit; padding:8px 10px; margin-bottom:10px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  button { width:100%; font:inherit; padding:8px; border:0; border-radius:6px; background:var(--blue); color:#fff; cursor:pointer; }
+  .err { color:var(--red); margin:0 0 12px; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>MPManager</h1>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  {% if ask_user %}<input name="username" placeholder="Gebruikersnaam" autocomplete="username" autofocus required>{% endif %}
+  <input name="password" type="password" placeholder="Wachtwoord" autocomplete="current-password" {% if not ask_user %}autofocus{% endif %} required>
+  <button>Inloggen</button>
+</form>
+</body>
+</html>

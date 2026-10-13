@@ -1,0 +1,8 @@
+config
+backups
+_oldversions
+.git
+.github
+.DS_Store
+**/__pycache__
+compose.local.yml
