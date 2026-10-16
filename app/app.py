@@ -283,6 +283,8 @@ def api_ads():
             "category": raw.get("categoryName"),
             "price_cents": raw.get("priceCents"),
             "price_type": raw.get("priceType"),
+            "bidding": bool(raw.get("biddingEnabled")),
+            "min_bid_cents": (store.load_backup(item_id) or {}).get("minimum_bid_cents") if raw.get("biddingEnabled") else None,
             "views": raw.get("viewCount"),
             "expires": (raw.get("closeDate") or "")[:10],
             "image": ("https:" + image if image.startswith("//") else image).replace("$_#", "$_82"),
@@ -315,6 +317,34 @@ def api_backup_all():
 @app.post("/api/ads/<item_id>/repost")
 def api_repost(item_id):
     return queued("repost", item_id, body().get("title"))
+
+
+def amount(value, what):
+    """Euros as typed ('65', '65,50', '1.250,00') -> 65.5, or None when left empty."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip().replace("€", "").replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        number = round(float(text), 2)
+    except ValueError:
+        raise MarktplaatsError(f"Ongeldige {what}: {value}")
+    if not 0 < number < 1_000_000:
+        raise MarktplaatsError(f"Ongeldige {what}: {value}")
+    return number
+
+
+@app.post("/api/ads/<item_id>/repost-adjust")
+def api_repost_adjust(item_id):
+    data = body()
+    price = amount(data.get("price"), "prijs")
+    if price is None:
+        raise MarktplaatsError("Vul een nieuwe prijs in.")
+    min_bid = amount(data.get("min_bid"), "minimumbod")
+    if min_bid is not None and min_bid > price:
+        raise MarktplaatsError("Het minimumbod mag niet hoger zijn dan de prijs.")
+    return jsonify(worker.enqueue("repost_adjust", item(item_id), data.get("title"), price=price, min_bid=min_bid))
 
 
 @app.post("/api/ads/<item_id>/delete")

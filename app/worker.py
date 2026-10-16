@@ -19,9 +19,9 @@ from store import log
 
 client = None                # set by app.py
 
-KINDS = {"backup": "Backup", "repost": "Herplaatsen", "auto_repost": "Automatisch herplaatsen",
+KINDS = {"backup": "Backup", "repost": "Herplaatsen", "repost_adjust": "Herplaatsen + aanpassen", "auto_repost": "Automatisch herplaatsen",
          "place": "Plaatsen uit backup", "delete": "Verwijderen"}
-HOLD = {"repost", "place", "delete"}          # kinds that wait before they run
+HOLD = {"repost", "repost_adjust", "place", "delete"}          # kinds that wait before they run
 CHECK_INTERVAL = 3600                         # how often the scheduler looks at the ads
 TICK = 20
 
@@ -40,15 +40,33 @@ def do_backup(item_id):
     return meta
 
 
-def do_place(item_id):
-    """New ad from the backup on disk. Honors dry run."""
+def euro(amount):
+    return "€ " + f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def change_note(ad, price, min_bid):
+    """'€ 75,00 → € 65,00', for the log, the history and Telegram."""
+    if price is None:
+        return None
+    note = f"{euro((ad.get('price_cents') or 0) / 100)} → {euro(price)}"
+    if min_bid is not None:
+        note += f", bieden vanaf {euro(min_bid)}"
+    return note
+
+
+def do_place(item_id, price=None, min_bid=None):
+    """New ad from the backup on disk, optionally at another price. Honors dry run."""
     ad = store.load_backup(item_id)
     if not ad:
         raise MarktplaatsError(f"Geen backup van {item_id}.")
+    if price is not None and ad.get("price_type") not in ("FIXED", "MIN_BID"):
+        raise MarktplaatsError("Deze advertentie heeft geen vraagprijs; de prijs aanpassen kan alleen bij een vraagprijs.")
     dry = store.settings()["dry_run"]
-    result = client.place(ad.get("form"), store.backup_photos(item_id), dry_run=dry)
+    result = client.place(ad.get("form"), store.backup_photos(item_id), price=price, min_bid=min_bid, dry_run=dry)
     if dry:
-        log(f"PROEF: '{ad['title']}' zou geplaatst worden met {len(result['fields'])} velden; niets verstuurd.")
+        fields = dict(result["fields"])
+        shown = f" voor {fields['price.value']}" if "price.value" in fields else ""
+        log(f"PROEF: '{ad['title']}' zou geplaatst worden{shown} met {len(result['fields'])} velden; niets verstuurd.")
     else:
         log(f"Geplaatst: '{ad['title']}' als {result['item_id']}.")
     return ad, result
@@ -61,18 +79,21 @@ def _backup_new(new_id):
         log(f"Backup van de nieuwe advertentie {new_id} lukte nog niet: {e.args[0]}")
 
 
-def do_repost(item_id):
+def do_repost(item_id, price=None, min_bid=None):
     """
-    Backup, place the copy, and only then delete the original. Whatever fails
-    before the last step leaves the original untouched.
+    Backup, place the copy (at a new price if given), and only then delete the
+    original. Whatever fails before the last step leaves the original untouched.
     """
     do_backup(item_id)
-    ad, result = do_place(item_id)
+    ad, result = do_place(item_id, price, min_bid)
+    note = change_note(ad, price, min_bid)
     if result.get("dry_run"):
-        return "proef: voorbereid, niets verstuurd"
+        return "proef: voorbereid, niets verstuurd" + (f" ({note})" if note else "")
     new_id = result["item_id"]
     store.mark_reposted(item_id, new_id)
-    store.record("herplaatst", ad["title"], item_id, new_id)
+    store.record("herplaatst", ad["title"], item_id, new_id, note)
+    if note:
+        log(f"Nieuwe prijs voor '{ad['title']}': {note}.")
     warning = None
     try:
         client.delete(item_id)
@@ -82,8 +103,8 @@ def do_repost(item_id):
         log("LET OP: " + warning)
         notify.failed("Verwijderen van de oude advertentie", ad["title"], warning)
     _backup_new(new_id)
-    notify.reposted(ad["title"], item_id, new_id)
-    return warning or f"herplaatst als {new_id}"
+    notify.reposted(ad["title"], item_id, new_id, note)
+    return warning or f"herplaatst als {new_id}" + (f" ({note})" if note else "")
 
 
 def do_restore(item_id):
@@ -110,8 +131,8 @@ def _run(job):
     kind, item_id = job["kind"], job["item_id"]
     if kind == "backup":
         return f"{len(do_backup(item_id)['photos'])} foto's"
-    if kind in ("repost", "auto_repost"):
-        return do_repost(item_id)
+    if kind in ("repost", "repost_adjust", "auto_repost"):
+        return do_repost(item_id, job.get("price"), job.get("min_bid"))
     if kind == "place":
         return do_restore(item_id)
     return do_delete(item_id)
@@ -119,7 +140,7 @@ def _run(job):
 
 # ---- the queue -----------------------------------------------------------
 
-def enqueue(kind, item_id, title=None, delay=None):
+def enqueue(kind, item_id, title=None, delay=None, price=None, min_bid=None):
     """Add a job, unless this ad already has one waiting or running."""
     with _lock:
         for job in _jobs.values():
@@ -131,7 +152,10 @@ def enqueue(kind, item_id, title=None, delay=None):
             delay = random.uniform(s["manual_delay_min"], s["manual_delay_max"]) if hold else 0
         job = {"id": next(_ids), "kind": kind, "label": KINDS[kind], "item_id": item_id,
                "title": title or (store.read_meta(item_id) or {}).get("title") or item_id,
-               "status": "wacht", "message": "", "created": time.time(), "run_at": time.time() + delay}
+               "status": "wacht", "message": "", "created": time.time(), "run_at": time.time() + delay,
+               "price": price, "min_bid": min_bid}
+        if price is not None:
+            job["label"] += f" (nieuwe prijs {euro(price)})"
         _jobs[job["id"]] = job
         for old in sorted(_jobs)[:-100]:
             if _jobs[old]["status"] not in ("wacht", "bezig"):

@@ -47,6 +47,10 @@
   .job { display:flex; gap:10px; align-items:center; padding:4px 0; font-size:14px; flex-wrap:wrap; }
   .job .st { min-width:92px; font-weight:600; }
   .st.klaar { color:var(--green); } .st.mislukt { color:var(--red); } .st.geannuleerd { color:var(--mute); }
+  dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); padding:18px; width:min(420px, calc(100vw - 32px)); }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  dialog h3 { margin:0 0 4px; }
+  dialog .grid { grid-template-columns:minmax(0,1fr) 140px; margin:14px 0; }
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#222; color:#fff; padding:10px 16px; border-radius:8px; max-width:90vw; display:none; z-index:9; }
   #toast.err { background:var(--red); }
   @media (max-width:640px) { .row { flex-wrap:wrap; } .row .acts { width:100%; justify-content:flex-start; } .grid { grid-template-columns:1fr; } }
@@ -161,6 +165,29 @@
     </form>
   </section>
 </main>
+<dialog id="adjustDlg">
+  <form onsubmit="submitAdjust(event)">
+    <h3>Herplaatsen + aanpassen</h3>
+    <p id="adjTitle" class="mute" style="margin:0"></p>
+    <div class="bar" style="margin:14px 0 0">
+      <span class="mute">Prijs verlagen:</span>
+      <button class="b small" type="button" onclick="discount(5)">−5%</button>
+      <button class="b small" type="button" onclick="discount(10)">−10%</button>
+      <button class="b small" type="button" onclick="discount(20)">−20%</button>
+    </div>
+    <div class="grid">
+      <label for="adjPrice">Nieuwe prijs (€) <span id="adjNow" class="mute"></span></label>
+      <input id="adjPrice" inputmode="decimal" autocomplete="off" required>
+      <label for="adjMin" id="adjMinLabel">Bieden vanaf (€), leeg = zoals nu, maar nooit boven de prijs</label>
+      <input id="adjMin" inputmode="decimal" autocomplete="off">
+    </div>
+    <p class="mute" style="margin:0 0 14px">De oude advertentie wordt verwijderd zodra de nieuwe online staat. Biedingen, bewaarders en weergaven vervallen.</p>
+    <div class="bar" style="justify-content:flex-end; margin:0">
+      <button class="b" type="button" onclick="$('adjustDlg').close()">Annuleren</button>
+      <button class="b primary" id="adjBtn">Herplaatsen</button>
+    </div>
+  </form>
+</dialog>
 <div id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -248,7 +275,8 @@ async function loadAds() {
         </div>
         <div class="acts">
           <button class="b" onclick="backup(${i}, this)">Backup</button>
-          <button class="b primary" onclick="repost(${i}, this)">Herplaatsen</button>
+          <button class="b primary" title="Precies hetzelfde opnieuw plaatsen" onclick="repost(${i}, this)">Herplaatsen</button>
+          <button class="b" title="Opnieuw plaatsen met een andere prijs" ${canAdjust(a) ? '' : 'disabled'} onclick="openAdjust(${i})">Herplaatsen + aanpassen</button>
           <button class="b ${a.excluded ? 'on' : ''}" title="Automatisch herplaatsen slaat uitgesloten advertenties over" onclick="exclude(${i}, this)">${a.excluded ? 'Uitgesloten' : 'Uitsluiten'}</button>
           <button class="b danger" onclick="removeAd(${i}, this)">Verwijderen</button>
         </div>
@@ -262,6 +290,35 @@ const repost = (i, btn) => busy(btn, async () => {
   await queue(`/api/ads/${ads[i].item_id}/repost`, {title: ads[i].title});
   toast(dryRun ? 'Proefmodus: wordt alleen voorbereid' : 'In de wachtrij gezet; annuleren kan nog even');
 });
+// ---- herplaatsen + aanpassen ----
+const canAdjust = a => ['FIXED', 'MIN_BID'].includes(a.price_type) && a.price_cents != null;
+const typed = v => String(v).replace(/[€\s]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+const shown = n => n.toLocaleString('nl-NL', {minimumFractionDigits:2, maximumFractionDigits:2, useGrouping:false});
+let adjusting = null;
+function openAdjust(i) {
+  const a = ads[i]; adjusting = i;
+  $('adjTitle').textContent = a.title;
+  $('adjNow').textContent = '(nu ' + euro(a.price_cents) + ')';
+  $('adjPrice').value = shown(a.price_cents / 100);
+  $('adjMin').value = ''; $('adjMin').placeholder = a.min_bid_cents ? shown(a.min_bid_cents / 100) : '';
+  $('adjMin').hidden = $('adjMinLabel').hidden = !a.bidding;
+  $('adjBtn').textContent = dryRun ? 'Proef herplaatsen' : 'Herplaatsen';
+  $('adjustDlg').showModal(); $('adjPrice').select();
+}
+function discount(pct) {
+  const base = ads[adjusting].price_cents / 100;
+  $('adjPrice').value = shown(Math.round(base * (100 - pct)) / 100);
+}
+const submitAdjust = ev => { ev.preventDefault(); busy($('adjBtn'), async () => {
+  const a = ads[adjusting], price = parseFloat(typed($('adjPrice').value));
+  const min = $('adjMin').value.trim() ? parseFloat(typed($('adjMin').value)) : null;
+  if (!(price > 0)) throw new Error('Vul een geldige prijs in.');
+  if (min !== null && !(min > 0 && min <= price)) throw new Error('Bieden vanaf moet tussen 0 en de prijs liggen.');
+  await queue(`/api/ads/${a.item_id}/repost-adjust`, {title: a.title, price, min_bid: min});
+  $('adjustDlg').close();
+  toast(dryRun ? 'Proefmodus: wordt alleen voorbereid (zie Log)' : 'In de wachtrij gezet; annuleren kan nog even');
+}); };
+
 const removeAd = (i, btn) => busy(btn, async () => {
   if (!dryRun && !confirm(`"${ads[i].title}" van Marktplaats verwijderen?`)) return;
   await queue(`/api/ads/${ads[i].item_id}/delete`, {title: ads[i].title});
@@ -300,7 +357,7 @@ async function loadHistory() {
   const {history} = await api('/api/history');
   $('historyList').innerHTML = history.map(h => `
     <div class="row"><div class="info"><b>${esc(h.title)}</b>
-      <small>${when(h.ts)} · ${esc(h.action)} · ${esc(h.old_id || '')}${h.new_id ? ' → ' + esc(h.new_id) : ''}</small></div></div>`).join('') || '<p>Nog niets gebeurd.</p>';
+      <small>${when(h.ts)} · ${esc(h.action)} · ${esc(h.old_id || '')}${h.new_id ? ' → ' + esc(h.new_id) : ''}${h.note ? ' · ' + esc(h.note) : ''}</small></div></div>`).join('') || '<p>Nog niets gebeurd.</p>';
 }
 async function loadLog() { $('logBox').textContent = (await api('/api/log')).lines.join('\n') || 'Leeg.'; }
 

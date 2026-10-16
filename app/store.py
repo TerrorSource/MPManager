@@ -152,10 +152,10 @@ def history():
     return _read(HISTORY_PATH, []) or []
 
 
-def record(action, title, old_id=None, new_id=None):
+def record(action, title, old_id=None, new_id=None, note=None):
     h = history()
     h.insert(0, {"ts": int(time.time()), "action": action, "title": title,
-                 "old_id": old_id, "new_id": new_id})
+                 "old_id": old_id, "new_id": new_id, "note": note})
     _atomic_write(HISTORY_PATH, h[:500])
 
 

@@ -47,9 +47,10 @@ def failed(what, title, message):
               f"<code>{html.escape(message[:400])}</code>")
 
 
-def reposted(title, old_id, new_id):
+def reposted(title, old_id, new_id, note=None):
     if store.settings()["notify_on"] == "all":
-        _emit(f"✅ <b>MPManager</b>\n<b>{html.escape(title or '?')}</b> herplaatst\n{old_id} → {new_id}")
+        extra = f" ({html.escape(note)})" if note else ""
+        _emit(f"✅ <b>MPManager</b>\n<b>{html.escape(title or '?')}</b> herplaatst{extra}\n{old_id} → {new_id}")
 
 
 def login_problem(message):

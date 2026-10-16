@@ -505,7 +505,7 @@ class Marktplaats:
             raise MarktplaatsError(f"Foto {name} geweigerd door Marktplaats: {r.text[:200]}")
         return data["id"], data.get("largeImageUrl") or data.get("imageUrl") or ""
 
-    def build_fields(self, form, new, bucket, images, price=None):
+    def build_fields(self, form, new, bucket, images, price=None, min_bid=None):
         """
         The form POST, field for field as the browser sends it. `form` is the
         backed-up ad, `new` the empty form Marktplaats just gave us (tokens,
@@ -539,9 +539,10 @@ class Marktplaats:
         bidding = bool(p.get("biddingEnabled"))
         if ptype in ("FIXED", "MIN_BID") and amount not in (None, ""):
             fields.append(("price.value", money(amount)))
-            if bidding and p.get("minimumBidPrice"):
-                min_bid = min(float(p["minimumBidPrice"]), float(amount))
-                fields.append(("price.minimumBidPrice", money(min_bid)))
+            # a new price keeps "bids from" at or below it, unless a new one is given
+            floor = min_bid if min_bid is not None else p.get("minimumBidPrice")
+            if bidding and floor:
+                fields.append(("price.minimumBidPrice", money(min(float(floor), float(amount)))))
         fields += [("price.typeValue", ptype), ("previousPriceType", ""),
                    ("price.biddingEnabled", "on" if bidding else "off")]
 
@@ -587,7 +588,7 @@ class Marktplaats:
                    ("signature", f.get("signature", ""))]
         return fields
 
-    def place(self, form, photo_paths, price=None, dry_run=False):
+    def place(self, form, photo_paths, price=None, min_bid=None, dry_run=False):
         """
         Create a new ad from a backed-up form. Returns {'item_id', 'url'}, or
         with dry_run the fields that would have been sent (nothing is uploaded
@@ -623,11 +624,11 @@ class Marktplaats:
             images = [(f"<foto {os.path.basename(p)}>", "") for p in photo_paths]
             hidden = {"xsrf.token", "signature", "tmsid", "timestamp"}
             return {"dry_run": True,
-                    "fields": [(k, v) for k, v in self.build_fields(form, new, bucket, images, price)
+                    "fields": [(k, v) for k, v in self.build_fields(form, new, bucket, images, price, min_bid)
                                if k not in hidden and k != "images.urls"]}
 
         images = [self._upload(p, xsrf, page.url) for p in photo_paths]
-        fields = self.build_fields(form, new, bucket, images, price)
+        fields = self.build_fields(form, new, bucket, images, price, min_bid)
         r = self._request("POST", "/plaats/ads", data=fields, timeout=90,
                           headers={"Origin": BASE, "Referer": page.url,
                                    "Accept": "text/html,application/xhtml+xml"})

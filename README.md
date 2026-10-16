@@ -96,7 +96,7 @@ de sleutel kwijt, dan log je opnieuw in.
 ## Wat het doet
 
 - **Advertenties**: je live advertenties, met per stuk *Backup*, *Herplaatsen*,
-  *Uitsluiten* en *Verwijderen*.
+  *Herplaatsen + aanpassen*, *Uitsluiten* en *Verwijderen*.
 - **Backups**: wat er op schijf staat. Downloaden als zip, of als nieuwe
   advertentie plaatsen.
 - **Geschiedenis** en **Log**: wat er gebeurd is.
@@ -112,6 +112,15 @@ de sleutel kwijt, dan log je opnieuw in.
 Mislukt stap 1 of 2, dan blijft de oude advertentie staan. De nieuwe advertentie
 begint zonder biedingen, bewaarders en weergaven. Er wordt alleen gratis
 geplaatst; waar plaatsen geld kost, weigert de tool.
+
+### Herplaatsen + aanpassen
+
+Hetzelfde als *Herplaatsen*, maar met een nieuwe prijs. Typ een bedrag of kies
+−5%, −10% of −20%. Bij advertenties met bieden kun je ook *bieden vanaf*
+aanpassen; laat je dat leeg, dan blijft het zoals het was, maar nooit hoger dan
+de nieuwe prijs. Alleen voor advertenties met een vraagprijs (niet bij gratis,
+"bieden" zonder prijs of "zie omschrijving"). De oude prijs en de nieuwe staan
+in de geschiedenis.
 
 ### Wachtrij
 
