@@ -99,6 +99,9 @@ de sleutel kwijt, dan log je opnieuw in.
   *Herplaatsen + aanpassen*, *Uitsluiten* en *Verwijderen*.
 - **Backups**: wat er op schijf staat. Downloaden als zip, of als nieuwe
   advertentie plaatsen.
+- **Zoekopdrachten**: houd Marktplaats of 2dehands in de gaten op zoekwoorden
+  en krijg nieuwe advertenties via Telegram (de functies van
+  [MPWatcher](https://github.com/TerrorSource/MPWatcher)).
 - **Geschiedenis** en **Log**: wat er gebeurd is.
 - **Instellingen**: login, proefmodus, automatisch backuppen en herplaatsen,
   Telegram.
@@ -121,6 +124,39 @@ aanpassen; laat je dat leeg, dan blijft het zoals het was, maar nooit hoger dan
 de nieuwe prijs. Alleen voor advertenties met een vraagprijs (niet bij gratis,
 "bieden" zonder prijs of "zie omschrijving"). De oude prijs en de nieuwe staan
 in de geschiedenis.
+
+### Zoekopdrachten
+
+Voeg een zoekwoord toe; de eerste zoekactie draait direct en slaat op wat er nu
+al te koop is, zonder melding. Daarna zoekt de tool op het ingestelde interval
+en meldt alleen **nieuwe** advertenties via Telegram, met foto, prijs, plaats
+en een knop naar de advertentie. Per zoekwoord in te stellen: interval, aantal
+per zoekactie, min./max. prijs, *negeer advertenties met* (bijv. `gezocht`),
+*alleen advertenties met*, site (Marktplaats.nl of 2dehands.be) en categorie.
+
+Verder, net als in MPWatcher:
+
+- herplaatsingen door een verkoper (zelfde titel, verkoper en prijs) worden
+  niet opnieuw gemeld, en dezelfde advertentie op twee zoekwoorden maar één keer;
+- optioneel een melding bij een prijsverlaging, en één samenvatting als er veel
+  tegelijk binnenkomt;
+- verkopers en advertentietitels negeren, ook direct vanaf een resultaat;
+- relevantiefilter: alle woorden van de zoekterm moeten voorkomen;
+- postcode en straal, slaapstand voor de nacht, verlopen advertenties
+  dagelijks gemarkeerd, en een meldingenlog met wat er gemeld of onderdrukt is
+  en waarom;
+- weigert de site een zoekopdracht, dan wacht de tool steeds langer (tot 6 uur).
+
+De zoekopdrachten zoeken anoniem, los van je Marktplaats-login, en gebruiken
+dezelfde Telegram-bot als de rest van MPManager. Meerdere ontvangers kan met
+komma-gescheiden chat-id's.
+
+**Overstappen van MPWatcher**: stop de MPWatcher-container, kopieer
+`results.db` uit de config-map van MPWatcher naar de config-map van MPManager
+en start MPManager. Zoekwoorden, resultaten, meldingenlog, instellingen en de
+Telegram-bot worden bij de eerste start overgenomen; `results.db` zelf blijft
+onaangeroerd en kan daarna weg. Dit gebeurt alleen zolang MPManager nog geen
+eigen `watcher.db` heeft.
 
 ### Wachtrij
 
@@ -206,6 +242,9 @@ Maak daarvoor eerst een `compose.local.yml` met `build: .` in plaats van
 | `app/worker.py` | Backup, plaatsen, herplaatsen; de wachtrij en de planner |
 | `app/store.py` | Backups, geschiedenis, instellingen en log op schijf |
 | `app/notify.py` | Telegram |
+| `app/watcher/` | Zoekopdrachten (uit MPWatcher): zoeken, filters, database, planner |
+| `app/watch_api.py` | API voor het tabblad Zoekopdrachten |
+| `tests/` | Tests van de zoekopdrachten (`pytest`) |
 | `app/app.py` | Webserver, eigen loginpagina, API |
 | `app/entrypoint.py` | Start; wisselt naar PUID/PGID |
 | `app/templates/` | De pagina's |

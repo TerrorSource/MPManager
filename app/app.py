@@ -12,11 +12,14 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 import mp_api
 import notify
 import store
+import watch_api
 import worker
 from mp_api import AuthError, MarktplaatsError
 from store import log
+from watcher import scheduler as watch_scheduler
 
 app = Flask(__name__)
+app.register_blueprint(watch_api.bp)
 client = mp_api.Marktplaats(os.path.join(store.CONFIG_DIR, "state.json"))
 worker.client = client
 notify.get_token = lambda: client.secret("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -420,7 +423,23 @@ def api_log():
 
 @app.get("/healthz")
 def healthz():
+    # Unhealthy when the search scheduler hangs, so Docker can restart the container.
+    if watch_scheduler.get_scheduler_status()["state"] == "stale":
+        return Response("zoekplanner reageert niet", status=503, mimetype="text/plain")
     return Response("ok", mimetype="text/plain")
+
+
+def adopt_mpwatcher_telegram():
+    """A taken-over MPWatcher database brings its Telegram bot; use it if MPManager has none."""
+    token, chats = watch_api.mpwatcher_telegram()
+    if not token and not chats:
+        return
+    if token and not client.secret("telegram_bot_token"):
+        client.set_secret("telegram_bot_token", token)
+    if chats and not store.settings()["telegram_chat_id"]:
+        store.save_settings({"telegram_chat_id": chats})
+    watch_api.forget_mpwatcher_telegram()
+    log("Telegram-bot van MPWatcher overgenomen (token versleuteld bewaard).")
 
 
 def main():
@@ -434,5 +453,8 @@ def main():
     if WEB_PASSWORD and placeholder_password():
         log("WEB_PASSWORD is de voorbeeldwaarde: niemand kan inloggen tot je een eigen wachtwoord zet.")
     worker.start()
+    if watch_api.setup(notify.target):
+        log("Zoekwoorden, resultaten en instellingen van MPWatcher overgenomen.")
+    adopt_mpwatcher_telegram()
     from waitress import serve
     serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), threads=6)

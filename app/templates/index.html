@@ -10,6 +10,7 @@
     :root { --bg:#17181a; --card:#212327; --ink:#e8e8e6; --mute:#9aa0a8; --line:#33363b; --blue:#6aa0ff; --red:#ff7b6b; --green:#5fd08f; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
   a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
   header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 16px; background:var(--card); border-bottom:3px solid var(--accent); }
@@ -47,6 +48,18 @@
   .job { display:flex; gap:10px; align-items:center; padding:4px 0; font-size:14px; flex-wrap:wrap; }
   .job .st { min-width:92px; font-weight:600; }
   .st.klaar { color:var(--green); } .st.mislukt { color:var(--red); } .st.geannuleerd { color:var(--mute); }
+  .sub { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .tag { display:inline-block; font-size:12px; padding:1px 7px; border-radius:99px; border:1px solid var(--line); color:var(--mute); margin-right:4px; }
+  .tag.warn { color:#222; background:var(--accent); border-color:transparent; }
+  .tag.err { color:var(--red); border-color:var(--red); }
+  .tag.new { color:#fff; background:var(--green); border-color:transparent; }
+  .row.is-new { border-color:var(--green); }
+  .kwedit { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:8px 12px; margin-top:10px; }
+  .kwedit label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--mute); }
+  .kwedit input, .kwedit select { width:100%; }
+  .catlist { max-height:55vh; overflow:auto; margin:12px 0; }
+  .catlist button { display:flex; justify-content:space-between; width:100%; text-align:left; margin-bottom:4px; }
+  .catlist .subcat { padding-left:26px; }
   dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); padding:18px; width:min(420px, calc(100vw - 32px)); }
   dialog::backdrop { background:rgba(0,0,0,.45); }
   dialog h3 { margin:0 0 4px; }
@@ -67,6 +80,7 @@
 <nav>
   <button data-tab="ads" class="on">Advertenties</button>
   <button data-tab="backups">Backups</button>
+  <button data-tab="watch">Zoekopdrachten</button>
   <button data-tab="history">Geschiedenis</button>
   <button data-tab="log">Log</button>
   <button data-tab="settings">Instellingen</button>
@@ -86,6 +100,55 @@
     <div id="adsList"></div>
   </section>
   <section id="backups" hidden><div id="backupList"></div></section>
+  <section id="watch" hidden>
+    <div class="sub">
+      <button class="b on" data-watch="overview" onclick="watchView('overview')">Zoekwoorden</button>
+      <button class="b" data-watch="notifications" onclick="watchView('notifications')">Meldingen</button>
+      <span id="watchStatus" class="mute" style="align-self:center"></span>
+    </div>
+
+    <div id="wOverview">
+      <form class="card" onsubmit="addKeyword(event)">
+        <b>Nieuw zoekwoord</b>
+        <p class="mute" style="margin:4px 0 10px">De eerste zoekactie draait direct en slaat wat er nu al te koop is stil op; daarna krijg je alleen nieuwe advertenties gemeld.</p>
+        <div class="kwedit" style="margin-top:0">
+          <label>Zoekterm<input id="nkTerm" required placeholder="bijv. lego 10305"></label>
+          <label>Min. prijs (€)<input id="nkMin" type="number" min="0"></label>
+          <label>Max. prijs (€)<input id="nkMax" type="number" min="0"></label>
+          <label>Negeer advertenties met<input id="nkExclude" placeholder="gezocht, gevraagd"></label>
+          <label>Alleen advertenties met<input id="nkInclude" placeholder="leeg = alles"></label>
+        </div>
+        <div class="bar" style="margin:12px 0 0"><button class="b primary" id="nkBtn">Toevoegen</button></div>
+      </form>
+      <div id="kwList"></div>
+      <h3 style="margin:20px 0 8px">Laatst gevonden</h3>
+      <div id="recentList"></div>
+    </div>
+
+    <div id="wResults" hidden>
+      <div class="bar">
+        <button class="b" onclick="watchView('overview')">← Zoekwoorden</button>
+        <b id="resTitle"></b>
+        <span id="resNew" class="tag new" hidden></span>
+      </div>
+      <form class="bar" onsubmit="return false">
+        <input id="resQuery" placeholder="Zoek op titel, verkoper of plaats" style="min-width:260px" oninput="clearTimeout(resTimer); resTimer = setTimeout(() => loadResults(0), 300)">
+        <button class="b" type="button" onclick="manualSearch(resKeyword, this)">Nu zoeken</button>
+        <span id="resInfo" class="mute"></span>
+      </form>
+      <div id="resList"></div>
+      <div class="bar"><button class="b" id="resPrev" onclick="loadResults(resOffset - resPage)">← Nieuwer</button><button class="b" id="resNext" onclick="loadResults(resOffset + resPage)">Ouder →</button></div>
+    </div>
+
+    <div id="wNotifications" hidden>
+      <div class="bar">
+        <select id="nfKind" onchange="loadNotifications()"><option value="">Alle soorten</option></select>
+        <select id="nfKeyword" onchange="loadNotifications()"><option value="">Alle zoekwoorden</option></select>
+        <input id="nfQuery" placeholder="Zoeken" oninput="clearTimeout(nfTimer); nfTimer = setTimeout(loadNotifications, 300)">
+      </div>
+      <div id="nfList"></div>
+    </div>
+  </section>
   <section id="history" hidden><div id="historyList"></div></section>
   <section id="log" hidden><pre id="logBox"></pre></section>
 
@@ -126,6 +189,46 @@
       </details>
     </div>
 
+    <form class="card" onsubmit="saveWatchSettings(event)">
+      <h3>Zoekopdrachten</h3>
+      <div class="grid">
+        <label for="w_marketplace">Site (per zoekwoord aan te passen)</label>
+        <select id="w_marketplace"><option value="marktplaats">Marktplaats.nl</option><option value="2dehands">2dehands.be</option></select>
+        <label for="w_default_interval_minutes">Standaard zoekinterval voor nieuwe zoekwoorden (minuten)</label><input type="number" min="1" id="w_default_interval_minutes">
+        <label for="w_default_limit_per_run">Standaard aantal advertenties per zoekactie (1–20)</label><input type="number" min="1" max="20" id="w_default_limit_per_run">
+        <label for="w_match_mode">Relevantie: alle woorden van de zoekterm moeten voorkomen in</label>
+        <select id="w_match_mode"><option value="text">titel of omschrijving</option><option value="title">de titel</option><option value="off">maakt niet uit (alles van de site)</option></select>
+        <label for="w_repost_dedup_days">Herplaatsingen door de verkoper niet opnieuw melden binnen (dagen, 0 = uit)</label><input type="number" min="0" id="w_repost_dedup_days">
+        <label for="w_expiry_check_days">Advertenties van de laatste (dagen) dagelijks controleren op verlopen (0 = uit)</label><input type="number" min="0" max="90" id="w_expiry_check_days">
+        <label for="w_skip_reserved">Gereserveerde advertenties overslaan</label><input type="checkbox" id="w_skip_reserved">
+      </div>
+      <h3 style="margin-top:20px">Locatie</h3>
+      <div class="grid">
+        <label for="w_postcode">Postcode (voor afstand en straal)</label><input id="w_postcode" placeholder="1234AB">
+        <label for="w_radius_km">Straal</label>
+        <select id="w_radius_km"><option value="alle">Alle afstanden</option><option>3</option><option>5</option><option>10</option><option>15</option><option>25</option><option>50</option><option>75</option></select>
+      </div>
+      <h3 style="margin-top:20px">Slaapstand</h3>
+      <div class="grid">
+        <label for="w_sleep_mode">'s Nachts hooguit één zoekactie per uur</label><input type="checkbox" id="w_sleep_mode">
+        <label for="w_sleep_start">Van (uu:mm)</label><input id="w_sleep_start" placeholder="23:00">
+        <label for="w_sleep_end">Tot (uu:mm)</label><input id="w_sleep_end" placeholder="07:00">
+      </div>
+      <h3 style="margin-top:20px">Meldingen van zoekopdrachten</h3>
+      <p class="mute">Via dezelfde Telegram-bot als hieronder bij Werking.</p>
+      <div class="grid">
+        <label for="w_price_drop_alerts">Melden als een bekende advertentie in prijs zakt</label><input type="checkbox" id="w_price_drop_alerts">
+        <label for="w_telegram_digest_threshold">Eén samenvatting vanaf zoveel nieuwe advertenties tegelijk (0 = altijd los)</label><input type="number" min="0" id="w_telegram_digest_threshold">
+        <label for="w_manual_telegram">Ook melden bij een handmatige zoekactie</label><input type="checkbox" id="w_manual_telegram">
+      </div>
+      <h3 style="margin-top:20px">Negeren</h3>
+      <div class="kwedit">
+        <label>Verkopers, één per regel<textarea id="w_blocked_sellers"></textarea></label>
+        <label>Advertentietitels, één per regel<textarea id="w_blocked_titles"></textarea></label>
+      </div>
+      <div class="bar" style="margin-top:16px"><button class="b primary" id="wSaveBtn">Opslaan</button></div>
+    </form>
+
     <form class="card" onsubmit="saveSettings(event)">
       <h3>Werking</h3>
       <div class="grid">
@@ -156,7 +259,7 @@
         <label for="s_notify_on">Melden</label>
         <select id="s_notify_on"><option value="off">Uit</option><option value="failures">Alleen als iets mislukt</option><option value="all">Mislukt en herplaatst</option></select>
         <label for="s_telegram_bot_token">Bot-token <span id="tokenState" class="mute"></span></label><input type="password" id="s_telegram_bot_token" autocomplete="off" placeholder="leeg = ongewijzigd">
-        <label for="s_telegram_chat_id">Chat-id</label><input id="s_telegram_chat_id" autocomplete="off">
+        <label for="s_telegram_chat_id">Chat-id('s), komma-gescheiden voor meerdere ontvangers</label><input id="s_telegram_chat_id" autocomplete="off">
       </div>
       <div class="bar" style="margin-top:16px">
         <button class="b primary" id="saveBtn">Instellingen opslaan</button>
@@ -165,6 +268,15 @@
     </form>
   </section>
 </main>
+<dialog id="catDlg">
+  <h3>Categorie</h3>
+  <p id="catTerm" class="mute" style="margin:0"></p>
+  <div id="catList" class="catlist"></div>
+  <div class="bar" style="justify-content:flex-end; margin:0">
+    <button class="b" type="button" onclick="setCategory(null)">Geen filter</button>
+    <button class="b" type="button" onclick="$('catDlg').close()">Sluiten</button>
+  </div>
+</dialog>
 <dialog id="adjustDlg">
   <form onsubmit="submitAdjust(event)">
     <h3>Herplaatsen + aanpassen</h3>
@@ -403,8 +515,177 @@ const logout = () => busy(null, async () => {
   await api('/api/session', 'DELETE'); status();
 });
 
+// ---- zoekopdrachten ----
+let keywords = [], kwOpen = new Set(), resKeyword = null, resOffset = 0, resPage = 100, resTimer = null, nfTimer = null, catKeyword = null;
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const SITE = {marktplaats: 'Marktplaats.nl', '2dehands': '2dehands.be'};
+
+function watchView(view) {
+  document.querySelectorAll('[data-watch]').forEach(b => b.classList.toggle('on', b.dataset.watch === view || (view === 'results' && b.dataset.watch === 'overview')));
+  $('wOverview').hidden = view !== 'overview'; $('wResults').hidden = view !== 'results'; $('wNotifications').hidden = view !== 'notifications';
+  busy(null, view === 'overview' ? loadWatch : view === 'notifications' ? loadNotifications : () => loadResults(0));
+}
+function adRow(ad, opts = {}) {
+  const place = ad.location ? esc(ad.location) + (ad.distance_km != null ? ` (${ad.distance_km} km)` : '') : '';
+  const seller = ad.seller ? (ad.seller_url ? `<a href="${esc(ad.seller_url)}" target="_blank" rel="noopener">${esc(ad.seller)}</a>` : esc(ad.seller)) : '';
+  const meta = [esc(ad.price), place, seller, opts.term ? 'zoekwoord ' + esc(ad.term) : '', 'gevonden ' + esc(ad.first_seen_display)].filter(Boolean).join(' · ');
+  const tags = (ad.reserved ? '<span class="tag warn">gereserveerd</span>' : '') + (ad.expired ? '<span class="tag">verlopen</span>' : '') + (opts.isNew ? '<span class="tag new">nieuw</span>' : '');
+  return `<div class="row${opts.isNew ? ' is-new' : ''}">
+    <img src="${esc(ad.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+    <div class="info">
+      <b><a href="${esc(ad.url)}" target="_blank" rel="noopener" title="${esc(ad.description)}">${esc(ad.title)}</a></b>
+      <small>${tags}${meta}</small>${ad.attributes ? `<br><small>${esc(ad.attributes)}</small>` : ''}
+    </div>
+    ${opts.actions ? `<div class="acts">
+      <button class="b small" title="Advertenties met precies deze titel voortaan negeren" onclick="blockTitle(${opts.i})">Negeer advertentie</button>
+      ${ad.seller ? `<button class="b small" title="Alle advertenties van deze verkoper voortaan negeren" onclick="blockSeller(${opts.i})">Negeer verkoper</button>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+async function loadWatch() {
+  const d = await api('/api/watch');
+  keywords = d.keywords;
+  const sch = d.scheduler.state === 'ok' ? 'planner actief' : 'planner: ' + d.scheduler.label;
+  $('watchStatus').textContent = [sch, d.in_sleep ? 'slaapstand' : '', d.error_count ? d.error_count + ' met fout' : '',
+    d.telegram_configured ? '' : 'Telegram niet ingesteld (Instellingen)'].filter(Boolean).join(' · ');
+  $('kwList').innerHTML = keywords.map((k, i) => {
+    const price = k.min_price != null || k.max_price != null ? `€ ${k.min_price ?? 0} – ${k.max_price ?? '∞'}` : '';
+    const filters = [k.exclude_terms ? 'negeer: ' + esc(k.exclude_terms) : '', k.include_terms ? 'alleen: ' + esc(k.include_terms) : ''].filter(Boolean).join(' · ');
+    return `<div class="card" style="padding:10px 12px">
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+        <div style="flex:1; min-width:220px">
+          <b>${esc(k.term)}</b> ${k.category_label ? `<span class="tag">${esc(k.category_label)}</span>` : ''}${k.marketplace ? `<span class="tag">${esc(SITE[k.marketplace] || k.marketplace)}</span>` : ''}${k.last_error ? `<span class="tag err" title="${esc(k.last_error)}">fout${k.error_count > 1 ? ' ×' + k.error_count : ''}</span>` : ''}<br>
+          <small class="mute">${k.result_count} resultaten · elke ${k.interval_minutes} min · laatst ${esc(k.last_run_display)} · volgende ${esc(k.next_run_display)}${price ? ' · ' + price : ''}${filters ? ' · ' + filters : ''}</small>
+        </div>
+        <div class="acts" style="display:flex; gap:6px; flex-wrap:wrap">
+          <button class="b primary" onclick="openResults(${i})">Resultaten</button>
+          <button class="b" onclick="manualSearch(${k.id}, this)">Nu zoeken</button>
+          <button class="b" onclick="openCategories(${i})">Categorie</button>
+          <button class="b" onclick="toggleEdit(${k.id})">${kwOpen.has(k.id) ? 'Sluiten' : 'Bewerken'}</button>
+          <a class="b" style="text-decoration:none" href="${esc(k.mp_url)}" target="_blank" rel="noopener">Op de site</a>
+        </div>
+      </div>
+      ${kwOpen.has(k.id) ? `<div class="kwedit">
+        <label>Zoekterm<input value="${esc(k.term)}" onchange="editKeyword(${k.id}, 'term', this.value)"></label>
+        <label>Interval (minuten)<input type="number" min="1" value="${k.interval_minutes}" onchange="editKeyword(${k.id}, 'interval_minutes', this.value)"></label>
+        <label>Per zoekactie (1–20)<input type="number" min="1" max="20" value="${k.limit_per_run}" onchange="editKeyword(${k.id}, 'limit_per_run', this.value)"></label>
+        <label>Min. prijs (€)<input type="number" min="0" value="${k.min_price ?? ''}" onchange="editKeyword(${k.id}, 'min_price', this.value)"></label>
+        <label>Max. prijs (€)<input type="number" min="0" value="${k.max_price ?? ''}" onchange="editKeyword(${k.id}, 'max_price', this.value)"></label>
+        <label>Negeer advertenties met<input value="${esc(k.exclude_terms)}" onchange="editKeyword(${k.id}, 'exclude_terms', this.value)"></label>
+        <label>Alleen advertenties met<input value="${esc(k.include_terms)}" onchange="editKeyword(${k.id}, 'include_terms', this.value)"></label>
+        <label>Site<select onchange="editKeyword(${k.id}, 'marketplace', this.value)">
+          <option value="" ${!k.marketplace ? 'selected' : ''}>Standaard (${esc(SITE[d.defaults.marketplace])})</option>
+          <option value="marktplaats" ${k.marketplace === 'marktplaats' ? 'selected' : ''}>Marktplaats.nl</option>
+          <option value="2dehands" ${k.marketplace === '2dehands' ? 'selected' : ''}>2dehands.be</option></select></label>
+      </div>
+      ${k.last_error ? `<p class="mute" style="margin:8px 0 0">Laatste fout: ${esc(k.last_error)}</p>` : ''}
+      <div class="bar" style="margin:10px 0 0">
+        <button class="b" onclick="resetKeyword(${i}, this)">Resultaten resetten</button>
+        <button class="b danger" onclick="deleteKeyword(${i}, this)">Zoekwoord verwijderen</button>
+        <span class="mute">Wijzigingen worden direct opgeslagen.</span>
+      </div>` : ''}
+    </div>`;
+  }).join('') || '<p>Nog geen zoekwoorden.</p>';
+  $('recentList').innerHTML = d.recent.map(a => adRow(a, {term: true})).join('') || '<p class="mute">Nog niets gevonden.</p>';
+}
+const toggleEdit = id => { kwOpen.has(id) ? kwOpen.delete(id) : kwOpen.add(id); busy(null, loadWatch); };
+const editKeyword = (id, field, value) => busy(null, async () => { await api(`/api/watch/keywords/${id}`, 'PATCH', {[field]: value}); toast('Opgeslagen'); loadWatch(); });
+const addKeyword = ev => { ev.preventDefault(); busy($('nkBtn'), async () => {
+  const r = await api('/api/watch/keywords', 'POST', {term: $('nkTerm').value, min_price: $('nkMin').value, max_price: $('nkMax').value,
+    exclude_terms: $('nkExclude').value, include_terms: $('nkInclude').value});
+  ['nkTerm', 'nkMin', 'nkMax', 'nkExclude', 'nkInclude'].forEach(id => $(id).value = '');
+  toast(r.message, !!r.warning); loadWatch();
+}); };
+const manualSearch = (id, btn) => busy(btn, async () => {
+  const r = await api(`/api/watch/keywords/${id}/search`, 'POST'); toast(r.message);
+  $('wResults').hidden ? loadWatch() : loadResults(0);
+});
+const resetKeyword = (i, btn) => busy(btn, async () => {
+  if (!confirm(`Alle resultaten van "${keywords[i].term}" wissen? De volgende zoekactie slaat weer stil op.`)) return;
+  await api(`/api/watch/keywords/${keywords[i].id}/reset`, 'POST'); loadWatch();
+});
+const deleteKeyword = (i, btn) => busy(btn, async () => {
+  if (!confirm(`Zoekwoord "${keywords[i].term}" en de resultaten ervan verwijderen?`)) return;
+  await api(`/api/watch/keywords/${keywords[i].id}`, 'DELETE'); kwOpen.delete(keywords[i].id); loadWatch();
+});
+
+let resAds = [];
+function openResults(i) { resKeyword = keywords[i].id; $('resQuery').value = ''; watchView('results'); }
+async function loadResults(offset) {
+  resOffset = Math.max(0, offset || 0);
+  const q = $('resQuery').value.trim();
+  const d = await api(`/api/watch/keywords/${resKeyword}/results?offset=${resOffset}&q=${encodeURIComponent(q)}`);
+  resAds = d.ads; resPage = d.page_size;
+  $('resTitle').textContent = d.keyword.term;
+  $('resInfo').textContent = d.total + (q ? ' gevonden' : ' resultaten');
+  // "Nieuw sinds je laatste bezoek": per zoekwoord in deze browser onthouden.
+  const key = 'mpm-seen-kw-' + resKeyword, last = lsGet(key);
+  let newest = '', count = 0;
+  $('resList').innerHTML = resAds.map((a, i) => {
+    const seen = a.first_seen_at || ''; if (seen > newest) newest = seen;
+    const isNew = !!(last && seen > last); if (isNew) count++;
+    return adRow(a, {actions: true, i, isNew});
+  }).join('') || '<p>Geen resultaten.</p>';
+  $('resNew').hidden = !count; $('resNew').textContent = count + ' nieuw sinds je laatste bezoek';
+  if (!q && resOffset === 0 && newest) lsSet(key, newest);
+  $('resPrev').disabled = resOffset === 0; $('resNext').disabled = resOffset + resPage >= d.total;
+}
+const blockTitle = i => busy(null, async () => {
+  if (!confirm(`Advertenties met de titel "${resAds[i].title}" voortaan negeren?`)) return;
+  toast((await api('/api/watch/block/title', 'POST', {title: resAds[i].title})).message); loadResults(resOffset);
+});
+const blockSeller = i => busy(null, async () => {
+  if (!confirm(`Alle advertenties van verkoper "${resAds[i].seller}" voortaan negeren?`)) return;
+  toast((await api('/api/watch/block/seller', 'POST', {seller: resAds[i].seller})).message);
+});
+
+let cats = [];
+const openCategories = i => busy(null, async () => {
+  catKeyword = keywords[i]; $('catTerm').textContent = catKeyword.term + (catKeyword.category_label ? ' · nu: ' + catKeyword.category_label : '');
+  $('catList').innerHTML = '<p class="mute">Categorieën ophalen…</p>'; $('catDlg').showModal();
+  cats = (await api(`/api/watch/keywords/${catKeyword.id}/categories`)).categories;
+  $('catList').innerHTML = cats.map((c, j) => `<button class="b${c.parent_id ? ' subcat' : ''}" onclick="setCategory(${j})">
+    <span>${esc(c.label)}</span><span class="mute">${c.count}</span></button>`).join('') || '<p class="mute">Geen categorieën gevonden voor deze zoekterm.</p>';
+});
+const setCategory = j => busy(null, async () => {
+  const c = j === null ? {} : cats[j];
+  const r = await api(`/api/watch/keywords/${catKeyword.id}/category`, 'POST',
+    j === null ? {category_id: null} : {category_id: c.id, category_parent_id: c.parent_id, category_label: c.parent_label ? c.parent_label + ' › ' + c.label : c.label});
+  $('catDlg').close(); toast(r.message); loadWatch();
+});
+
+async function loadNotifications() {
+  const params = new URLSearchParams({kind: $('nfKind').value, keyword_id: $('nfKeyword').value, q: $('nfQuery').value.trim()});
+  const d = await api('/api/watch/notifications?' + params);
+  if ($('nfKind').options.length === 1) Object.entries(d.kinds).forEach(([k, v]) => $('nfKind').add(new Option(v, k)));
+  const kwSel = $('nfKeyword'), chosen = kwSel.value;
+  if (!keywords.length) keywords = (await api('/api/watch')).keywords;
+  kwSel.length = 1; keywords.forEach(k => kwSel.add(new Option(k.term, k.id))); kwSel.value = chosen;
+  $('nfList').innerHTML = d.items.map(n => `<div class="row"><div class="info">
+    <b>${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title || n.term)}</a>` : esc(n.title || n.term)}</b>
+    <small><span class="tag${n.kind === 'suppressed' ? '' : n.sent ? ' new' : ''}">${esc(n.kind_label)}</span>${esc(n.created_display)} · ${esc(n.term)}${n.price ? ' · ' + esc(n.price) : ''}${n.detail ? ' · ' + esc(n.detail) : ''}${['new', 'price_drop', 'digest'].includes(n.kind) && !n.sent ? ' · niet verstuurd' : ''}</small>
+  </div></div>`).join('') || '<p>Nog geen meldingen.</p>';
+}
+
+const W_IDS = ['marketplace','default_interval_minutes','default_limit_per_run','match_mode','repost_dedup_days','expiry_check_days','skip_reserved',
+               'postcode','radius_km','sleep_mode','sleep_start','sleep_end','price_drop_alerts','telegram_digest_threshold','manual_telegram',
+               'blocked_sellers','blocked_titles'];
+async function loadWatchSettings() {
+  const s = await api('/api/watch/settings');
+  for (const k of W_IDS) { const el = $('w_' + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = s[k]; }
+}
+const saveWatchSettings = ev => { ev.preventDefault(); busy($('wSaveBtn'), async () => {
+  const data = {};
+  for (const k of W_IDS) { const el = $('w_' + k); data[k] = el.type === 'checkbox' ? el.checked : el.value; }
+  const r = await api('/api/watch/settings', 'POST', data);
+  toast(r.refused.length ? 'Opgeslagen, behalve ongeldige waarde bij: ' + r.refused.join(', ') : 'Opgeslagen' + (r.removed ? `; ${r.removed} resultaten verwijderd` : ''), r.refused.length > 0);
+  loadWatchSettings();
+}); };
+
 let currentTab = 'ads';
-const loaders = {ads: loadAds, backups: loadBackups, history: loadHistory, log: loadLog, settings: loadSettings};
+const loaders = {ads: loadAds, backups: loadBackups, watch: () => { watchView('overview'); }, history: loadHistory, log: loadLog,
+                 settings: async () => { await loadSettings(); await loadWatchSettings(); }};
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   currentTab = b.dataset.tab;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
