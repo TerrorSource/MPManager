@@ -79,15 +79,18 @@
 </header>
 <nav>
   <button data-tab="ads" class="on">Advertenties</button>
-  <button data-tab="backups">Backups</button>
   <button data-tab="watch">Zoekopdrachten</button>
-  <button data-tab="history">Geschiedenis</button>
-  <button data-tab="log">Log</button>
   <button data-tab="settings">Instellingen</button>
+  <button data-tab="backups">Backups</button>
+  <button data-tab="history">Geschiedenis</button>
+  <button data-tab="log">Logs</button>
 </nav>
 <main>
   <div class="card" id="jobsCard" hidden>
-    <b>Wachtrij</b>
+    <div style="display:flex; align-items:center; gap:8px">
+      <b style="flex:1">Wachtrij</b>
+      <button class="b small" title="Verbergen tot er iets nieuws in de wachtrij komt" aria-label="Wachtrij verbergen" onclick="dismissJobs()">✕</button>
+    </div>
     <div id="jobsList"></div>
   </div>
 
@@ -189,6 +192,53 @@
       </details>
     </div>
 
+    <form class="card" onsubmit="saveSettings(event)">
+      <h3>Advertenties</h3>
+      <p class="mute">Backuppen, herplaatsen en verwijderen van je eigen advertenties.</p>
+      <div class="grid">
+        <label for="s_dry_run">Proefmodus: herplaatsen en verwijderen alleen voorbereiden</label><input type="checkbox" id="s_dry_run">
+        <label for="s_manual_delay_min">Wachttijd na een klik op Herplaatsen, Plaatsen of Verwijderen: minimaal (seconden)</label><input type="number" min="0" id="s_manual_delay_min">
+        <label for="s_manual_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_manual_delay_max">
+      </div>
+
+      <h3 style="margin-top:20px">Automatisch backuppen</h3>
+      <div class="grid">
+        <label for="s_auto_backup">Elk uur een backup maken van advertenties die er nog geen hebben</label><input type="checkbox" id="s_auto_backup">
+        <label for="s_backup_retention_days">Backups van advertenties die niet meer online staan opruimen na (dagen, 0 = nooit)</label><input type="number" min="0" id="s_backup_retention_days">
+      </div>
+
+      <h3 style="margin-top:20px">Automatisch herplaatsen</h3>
+      <p class="mute">Slaat advertenties over die zijn uitgesloten, gereserveerd zijn of een bod hebben. Begin klein: veel herplaatsen kan Marktplaats als misbruik zien.</p>
+      <div class="grid">
+        <label for="s_auto_repost">Automatisch herplaatsen aan</label><input type="checkbox" id="s_auto_repost">
+        <label for="s_min_age_days">Alleen advertenties die minstens zo lang online staan (dagen)</label><input type="number" min="0" id="s_min_age_days">
+        <label for="s_max_per_day">Maximaal aantal per dag</label><input type="number" min="0" id="s_max_per_day">
+        <label for="s_active_hours">Alleen tussen (uu:mm-uu:mm)</label><input id="s_active_hours" pattern="\d\d:\d\d-\d\d:\d\d">
+        <label for="s_auto_delay_min">Pauze tussen twee herplaatsingen: minimaal (seconden)</label><input type="number" min="0" id="s_auto_delay_min">
+        <label for="s_auto_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_auto_delay_max">
+      </div>
+
+      <h3 style="margin-top:20px">Meldingen over je advertenties</h3>
+      <div class="grid">
+        <label for="s_notify_on">Via Telegram melden</label>
+        <select id="s_notify_on"><option value="off">Uit</option><option value="failures">Alleen als iets mislukt</option><option value="all">Mislukt en herplaatst</option></select>
+      </div>
+      <div class="bar" style="margin-top:16px"><button class="b primary">Opslaan</button></div>
+    </form>
+
+    <form class="card" onsubmit="saveSettings(event)">
+      <h3>Telegram</h3>
+      <p class="mute">Eén bot voor alle meldingen: over je advertenties en van de zoekopdrachten.</p>
+      <div class="grid">
+        <label for="s_telegram_bot_token">Bot-token <span id="tokenState" class="mute"></span></label><input type="password" id="s_telegram_bot_token" autocomplete="off" placeholder="leeg = ongewijzigd">
+        <label for="s_telegram_chat_id">Chat-id('s), komma-gescheiden voor meerdere ontvangers</label><input id="s_telegram_chat_id" autocomplete="off">
+      </div>
+      <div class="bar" style="margin-top:16px">
+        <button class="b primary">Opslaan</button>
+        <button class="b" type="button" onclick="testTelegram(this)">Testbericht sturen</button>
+      </div>
+    </form>
+
     <form class="card" onsubmit="saveWatchSettings(event)">
       <h3>Zoekopdrachten</h3>
       <div class="grid">
@@ -215,7 +265,7 @@
         <label for="w_sleep_end">Tot (uu:mm)</label><input id="w_sleep_end" placeholder="07:00">
       </div>
       <h3 style="margin-top:20px">Meldingen van zoekopdrachten</h3>
-      <p class="mute">Via dezelfde Telegram-bot als hieronder bij Werking.</p>
+      <p class="mute">Via de Telegram-bot hierboven.</p>
       <div class="grid">
         <label for="w_price_drop_alerts">Melden als een bekende advertentie in prijs zakt</label><input type="checkbox" id="w_price_drop_alerts">
         <label for="w_telegram_digest_threshold">Eén samenvatting vanaf zoveel nieuwe advertenties tegelijk (0 = altijd los)</label><input type="number" min="0" id="w_telegram_digest_threshold">
@@ -229,43 +279,6 @@
       <div class="bar" style="margin-top:16px"><button class="b primary" id="wSaveBtn">Opslaan</button></div>
     </form>
 
-    <form class="card" onsubmit="saveSettings(event)">
-      <h3>Werking</h3>
-      <div class="grid">
-        <label for="s_dry_run">Proefmodus: herplaatsen en verwijderen alleen voorbereiden</label><input type="checkbox" id="s_dry_run">
-        <label for="s_manual_delay_min">Wachttijd na een klik op Herplaatsen, Plaatsen of Verwijderen: minimaal (seconden)</label><input type="number" min="0" id="s_manual_delay_min">
-        <label for="s_manual_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_manual_delay_max">
-      </div>
-
-      <h3 style="margin-top:20px">Automatisch backuppen</h3>
-      <div class="grid">
-        <label for="s_auto_backup">Elk uur een backup maken van advertenties die er nog geen hebben</label><input type="checkbox" id="s_auto_backup">
-        <label for="s_backup_retention_days">Backups van advertenties die niet meer online staan opruimen na (dagen, 0 = nooit)</label><input type="number" min="0" id="s_backup_retention_days">
-      </div>
-
-      <h3 style="margin-top:20px">Automatisch herplaatsen</h3>
-      <p class="mute">Slaat advertenties over die zijn uitgesloten, gereserveerd zijn of een bod hebben. Begin klein: veel herplaatsen kan Marktplaats als misbruik zien.</p>
-      <div class="grid">
-        <label for="s_auto_repost">Automatisch herplaatsen aan</label><input type="checkbox" id="s_auto_repost">
-        <label for="s_min_age_days">Alleen advertenties die minstens zo lang online staan (dagen)</label><input type="number" min="0" id="s_min_age_days">
-        <label for="s_max_per_day">Maximaal aantal per dag</label><input type="number" min="0" id="s_max_per_day">
-        <label for="s_active_hours">Alleen tussen (uu:mm-uu:mm)</label><input id="s_active_hours" pattern="\d\d:\d\d-\d\d:\d\d">
-        <label for="s_auto_delay_min">Pauze tussen twee herplaatsingen: minimaal (seconden)</label><input type="number" min="0" id="s_auto_delay_min">
-        <label for="s_auto_delay_max">… en maximaal (seconden)</label><input type="number" min="0" id="s_auto_delay_max">
-      </div>
-
-      <h3 style="margin-top:20px">Telegram-meldingen</h3>
-      <div class="grid">
-        <label for="s_notify_on">Melden</label>
-        <select id="s_notify_on"><option value="off">Uit</option><option value="failures">Alleen als iets mislukt</option><option value="all">Mislukt en herplaatst</option></select>
-        <label for="s_telegram_bot_token">Bot-token <span id="tokenState" class="mute"></span></label><input type="password" id="s_telegram_bot_token" autocomplete="off" placeholder="leeg = ongewijzigd">
-        <label for="s_telegram_chat_id">Chat-id('s), komma-gescheiden voor meerdere ontvangers</label><input id="s_telegram_chat_id" autocomplete="off">
-      </div>
-      <div class="bar" style="margin-top:16px">
-        <button class="b primary" id="saveBtn">Instellingen opslaan</button>
-        <button class="b" type="button" onclick="testTelegram(this)">Testbericht sturen</button>
-      </div>
-    </form>
   </section>
 </main>
 <dialog id="catDlg">
@@ -348,15 +361,20 @@ async function status() {
 }
 
 // ---- wachtrij ----
-let jobTimer = null, lastActive = 0;
+let jobTimer = null, lastActive = 0, jobsShown = [], jobsDismissedUpTo = 0;
+const QUEUE_TABS = ['ads', 'history'];
+function showJobsCard() { $('jobsCard').hidden = !QUEUE_TABS.includes(currentTab) || !jobsShown.length; }
+function dismissJobs() { jobsDismissedUpTo = Math.max(0, ...jobsShown.map(j => j.id)); jobsShown = []; showJobsCard(); }
 async function loadJobs() {
   let jobs = [];
   try { jobs = (await api('/api/jobs')).jobs; } catch (e) { return; }
   const now = Date.now() / 1000;
   const active = jobs.filter(j => j.status === 'wacht' || j.status === 'bezig');
   const recent = jobs.filter(j => j.finished && now - j.finished < 600 || j.status === 'geannuleerd' && now - j.created < 600);
-  const show = [...active, ...recent.filter(j => !active.includes(j))].slice(0, 12);
-  $('jobsCard').hidden = !show.length;
+  // Hidden with ✕ until a job newer than what was on screen shows up (numbers restart with the container).
+  if (jobs.length && Math.max(...jobs.map(j => j.id)) < jobsDismissedUpTo) jobsDismissedUpTo = 0;
+  const show = [...active, ...recent.filter(j => !active.includes(j))].filter(j => j.id > jobsDismissedUpTo).slice(0, 12);
+  jobsShown = show; showJobsCard();
   $('jobsList').innerHTML = show.map(j => {
     const wait = Math.max(0, Math.round(j.run_at - now));
     const st = j.status === 'wacht' ? (wait ? `wacht ${wait < 90 ? wait + ' s' : Math.round(wait / 60) + ' min'}` : 'wacht') : j.status;
@@ -480,7 +498,7 @@ async function loadSettings() {
   for (const k of SETTING_IDS) { const el = $('s_' + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = s[k]; }
   $('tokenState').textContent = s.telegram_token_set ? '(versleuteld bewaard)' : '(nog niet ingesteld)';
 }
-const saveSettings = ev => { ev.preventDefault(); busy($('saveBtn'), async () => {
+const saveSettings = ev => { ev.preventDefault(); busy(ev.submitter, async () => {
   const data = {};
   for (const k of SETTING_IDS) { const el = $('s_' + k); data[k] = el.type === 'checkbox' ? el.checked : el.value; }
   if ($('s_telegram_bot_token').value) data.telegram_bot_token = $('s_telegram_bot_token').value;
@@ -690,6 +708,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   currentTab = b.dataset.tab;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('main section').forEach(s => s.hidden = s.id !== currentTab);
+  showJobsCard();
   busy(null, loaders[currentTab]);
 });
 status().then(s => s.logged_in ? loadAds() : document.querySelector('[data-tab=settings]').click()).catch(e => toast(e.message, true));
