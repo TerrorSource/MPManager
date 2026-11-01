@@ -46,6 +46,9 @@ USER_AGENT = os.environ.get(
 )
 LOGIN_COOKIES = ("MpSecurity", "MpSslSecurity")
 TIMEOUT = 30
+# Reads are tried again after a dropped connection; writes never are: a
+# placement that is sent twice would put the ad online twice.
+READ_RETRIES = (2, 5)             # seconds to wait before attempt 2 and 3
 
 # Parts of the edit form that are tokens or bulk, not ad content.
 FORM_DROP = ("auth", "experiments", "tenantContext", "genAiSyi")
@@ -403,10 +406,17 @@ class Marktplaats:
         url = path if path.startswith("http") else BASE + path
         retried = kw.pop("_retried", False)
         timeout = kw.pop("timeout", TIMEOUT)
-        try:
-            r = self.http.request(method, url, timeout=timeout, **kw)
-        except requests.RequestException as e:
-            raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+        waits = list(READ_RETRIES) if method == "GET" else []
+        while True:
+            try:
+                r = self.http.request(method, url, timeout=timeout, **kw)
+                break
+            except (requests.ConnectionError, requests.Timeout) as e:
+                if not waits:
+                    raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+                time.sleep(waits.pop(0))
+            except requests.RequestException as e:
+                raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
         if r.status_code in (401, 403) or "/identity/" in r.url:
             if not retried and "files" not in kw and self._relogin():
                 return self._request(method, path, _retried=True, timeout=timeout, **kw)
@@ -468,12 +478,21 @@ class Marktplaats:
         """The original upload: the CDN serves it when the size rule is left off."""
         if url.startswith("//"):
             url = "https:" + url
+        problem = None
         for candidate in (url.split("?")[0], re.sub(r"\$_(#|\d+)", "$_86", url)):
-            r = self.http.get(candidate, timeout=TIMEOUT)
-            if r.status_code == 200 and len(r.content) > 500 and \
-                    r.headers.get("Content-Type", "").startswith("image/"):
-                return r.content
-        raise MarktplaatsError(f"Foto niet te downloaden: {url}")
+            for wait in (0, *READ_RETRIES):
+                time.sleep(wait)
+                try:
+                    r = self.http.get(candidate, timeout=TIMEOUT)
+                except requests.RequestException as e:
+                    problem = f"{type(e).__name__}"
+                    continue
+                if r.status_code == 200 and len(r.content) > 500 and \
+                        r.headers.get("Content-Type", "").startswith("image/"):
+                    return r.content
+                problem = f"HTTP {r.status_code}"
+                break                     # an answer, just not a photo: try the other address
+        raise MarktplaatsError(f"Foto niet te downloaden ({problem}): {url}")
 
     # ---- placing ---------------------------------------------------------
 
@@ -629,9 +648,15 @@ class Marktplaats:
 
         images = [self._upload(p, xsrf, page.url) for p in photo_paths]
         fields = self.build_fields(form, new, bucket, images, price, min_bid)
-        r = self._request("POST", "/plaats/ads", data=fields, timeout=90,
-                          headers={"Origin": BASE, "Referer": page.url,
-                                   "Accept": "text/html,application/xhtml+xml"})
+        try:
+            r = self._request("POST", "/plaats/ads", data=fields, timeout=90,
+                              headers={"Origin": BASE, "Referer": page.url,
+                                       "Accept": "text/html,application/xhtml+xml"})
+        except MarktplaatsError as e:
+            # The form went out but no answer came back: it may or may not be online.
+            raise MarktplaatsError("Geen antwoord van Marktplaats op het plaatsen; het is onduidelijk of de nieuwe "
+                                   "advertentie online staat. De oude is niet verwijderd: kijk op Marktplaats en "
+                                   f"verwijder zo nodig een dubbele. ({e.args[0]})") from e
         m = re.search(r"/seller/view/(m\d+)", r.url)
         if m:
             return {"item_id": m.group(1), "url": f"{BASE}/seller/view/{m.group(1)}"}

@@ -73,10 +73,19 @@ def do_place(item_id, price=None, min_bid=None):
 
 
 def _backup_new(new_id):
+    """
+    So the live ad has a backup under its own number. The ad is already online
+    at this point, so nothing here may turn a repost into a failure: what does
+    not work now, the hourly automatic backup does later.
+    """
     try:
-        do_backup(new_id)             # so the live ad has a backup under its own number
-    except (MarktplaatsError, AuthError) as e:
-        log(f"Backup van de nieuwe advertentie {new_id} lukte nog niet: {e.args[0]}")
+        do_backup(new_id)
+        return None
+    except Exception as e:
+        reason = e.args[0] if isinstance(e, (MarktplaatsError, AuthError)) and e.args else f"{type(e).__name__}: {e}"
+        log(f"Backup van de nieuwe advertentie {new_id} lukte nog niet ({reason}); "
+            "de automatische backup probeert het later opnieuw.")
+        return "backup volgt later"
 
 
 def do_repost(item_id, price=None, min_bid=None):
@@ -98,13 +107,18 @@ def do_repost(item_id, price=None, min_bid=None):
     try:
         client.delete(item_id)
         log(f"Oude advertentie {item_id} verwijderd.")
-    except (MarktplaatsError, AuthError) as e:
-        warning = f"nieuwe advertentie {new_id} staat online, maar de oude {item_id} is niet verwijderd: {e.args[0]}"
+    except Exception as e:
+        reason = e.args[0] if isinstance(e, (MarktplaatsError, AuthError)) and e.args else f"{type(e).__name__}: {e}"
+        warning = f"nieuwe advertentie {new_id} staat online, maar de oude {item_id} is niet verwijderd: {reason}"
         log("LET OP: " + warning)
         notify.failed("Verwijderen van de oude advertentie", ad["title"], warning)
-    _backup_new(new_id)
-    notify.reposted(ad["title"], item_id, new_id, note)
-    return warning or f"herplaatst als {new_id}" + (f" ({note})" if note else "")
+    later = _backup_new(new_id)
+    try:
+        notify.reposted(ad["title"], item_id, new_id, note)
+    except Exception as e:
+        log(f"Telegram-melding niet verstuurd: {type(e).__name__}")
+    done = f"herplaatst als {new_id}" + (f" ({note})" if note else "") + (f"; {later}" if later else "")
+    return warning or done
 
 
 def do_restore(item_id):
@@ -284,7 +298,8 @@ def _scan():
     s = store.settings()
     listings = client.listings()
     if s["auto_backup"]:
-        backed = {m["item_id"] for m in store.list_backups()}
+        # A backup without photos (made before Marktplaats had processed them) counts as missing.
+        backed = {m["item_id"] for m in store.list_backups() if m.get("photos") and not m.get("partial")}
         for raw in listings:
             if raw.get("itemId") not in backed:
                 enqueue("backup", raw["itemId"], raw.get("title"))
