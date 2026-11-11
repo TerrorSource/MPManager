@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 # Security updates of the base image (the build is refused on a CRITICAL finding)
 RUN apt-get update \
