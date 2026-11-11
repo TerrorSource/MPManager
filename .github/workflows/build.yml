@@ -1,7 +1,9 @@
-name: Build and push image
+name: Test, scan, build and push image
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -9,31 +11,46 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt pytest
-      - run: pytest -q
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest -q
 
   build:
+    # Only after the tests pass, and never from a pull request.
+    # Order: build locally (amd64) -> Trivy scan -> only with a clean scan
+    # build for both platforms and push. The build cache makes the second build quick.
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -43,10 +60,41 @@ jobs:
         run: |
           echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/mpmanager" >> "$GITHUB_ENV"
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build (amd64, local) for the scan
+        uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: mpmanager:scan
+
+      - name: Trivy - refuse on CRITICAL
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: mpmanager:scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy - report HIGH (informative)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: mpmanager:scan
+          format: table
+          severity: HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
           push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ${{ env.IMAGE }}:latest

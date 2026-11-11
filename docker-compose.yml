@@ -13,10 +13,10 @@ services:
       - TZ=Europe/Amsterdam            # de tijdzone waarin "actieve uren" gelezen wordt
       - PUID=1000                      # draai als deze gebruiker, zodat de bestanden op de NAS van jou zijn
       - PGID=1000
-      - WEB_USER=CHANGE_ME             # login voor de pagina: je typt er je Marktplaats-wachtwoord in
+      - WEB_USER=CHANGE_ME             # login voor de pagina: je typt er het wachtwoord van je account in
       - WEB_PASSWORD=CHANGE_ME         # deze voorbeeldwaarde wordt geweigerd: niemand komt binnen tot je hem wijzigt
       # - SECRET_KEY=                  # optioneel: eigen sleutel voor de versleutelde login (anders een bestand in /keys)
-      # - USER_AGENT=                  # optioneel: de user agent waarmee de tool zich bij Marktplaats meldt
+      # - USER_AGENT=                  # optioneel: de user agent waarmee de tool zich bij de site meldt
       #
       # Alles hieronder is ALLEEN EEN BEGINWAARDE, voor zolang je op de pagina nog
       # nooit Instellingen hebt opgeslagen. Daarna gelden de waarden van de pagina
@@ -38,7 +38,8 @@ services:
       # - TELEGRAM_BOT_TOKEN=
       # - TELEGRAM_CHAT_ID=
     volumes:
-      # Je versleutelde Marktplaats-login (state.json), instellingen en geschiedenis.
+      # Je versleutelde login (state.json), instellingen, wachtrij, log en zoekopdrachten.
+      # Geen map die een cloud-dienst "op aanvraag" synchroniseert (OneDrive, Dropbox, iCloud).
       - /share/CACHEDEV1_DATA/Docker/mpmanager/config:/config
       # Backups van je advertenties: per advertentie een map met ad.json en photos/.
       - /share/CACHEDEV1_DATA/Docker/mpmanager/backups:/data/backups

@@ -1,0 +1,9 @@
+# Lint (runs in CI and locally with `ruff check .`)
+line-length = 130
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+  "E501",  # line length: long Dutch texts and SQL strings are fine
+]

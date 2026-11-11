@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from watcher import db, marketplace, notify, scheduler
+import notify
+from watcher import db, marketplace, scheduler
 from watcher.config import MarketplaceError
 
 
@@ -24,7 +25,7 @@ def _fetch(ads):
 @pytest.fixture()
 def telegram_log(monkeypatch):
     sent: list[tuple[str, dict]] = []
-    monkeypatch.setattr(notify, "_telegram_post", lambda method, payload, settings, label="": sent.append((method, payload)) or True)
+    monkeypatch.setattr(notify, "post", lambda method, payload, label="": sent.append((method, payload)) or True)
     return sent
 
 
@@ -41,7 +42,7 @@ def keyword():
 def _settings(**overrides):
     s = db.load_settings()
     # match_mode uit: deze tests gebruiken fictieve titels die niet op "flow-test" lijken
-    s.update({"telegram_bot_id": "bot", "telegram_chat_id": "chat", "repost_dedup_days": 0, "match_mode": "off"})
+    s.update({"repost_dedup_days": 0, "match_mode": "off"})
     s.update(overrides)
     return s
 
@@ -173,7 +174,7 @@ def test_digest_when_many_new_ads(monkeypatch, telegram_log, keyword):
 def test_scheduler_iteration_runs_due_keywords(monkeypatch, telegram_log):
     db.init_db()
     monkeypatch.setattr(scheduler.time_module, "sleep", lambda s: None)
-    db.save_settings({"telegram_bot_id": "bot", "telegram_chat_id": "chat", "repost_dedup_days": 0, "match_mode": "off"})
+    db.save_settings({"repost_dedup_days": 0, "match_mode": "off"})
 
     now = datetime.now()
     due = db.add_keyword_row("due", 15, None, None, 5)
@@ -334,42 +335,41 @@ def test_check_ad_alive_status_codes(monkeypatch, real_fetch_market_results):
 
 
 def test_telegram_retries_on_rate_limit(monkeypatch, real_telegram_post):
+    import store
+    store.save_settings({"telegram_chat_id": "c"})
+
     class Resp:
         def __init__(self, code, retry_after=None):
-            self.status_code, self.ok, self.text = code, code == 200, f"HTTP {code}"
-            self._retry = retry_after
+            self.status_code, self._retry = code, retry_after
 
         def json(self):
             return {"parameters": {"retry_after": self._retry}} if self._retry else {}
 
-    calls, sleeps = [], []
+    calls, sleeps, responses = [], [], []
 
-    class FakeHTTP:
-        def __init__(self, responses):
-            self.responses = list(responses)
+    def fake_post(url, json=None, timeout=10):
+        calls.append(url)
+        return responses.pop(0)
 
-        def post(self, url, json=None, timeout=10):
-            calls.append(url)
-            return self.responses.pop(0)
-
-    monkeypatch.setattr(notify.time_module, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    monkeypatch.setattr(notify.time, "sleep", lambda s: sleeps.append(s))
 
     # 429 met retry_after 2 -> wachten en opnieuw -> 200
-    monkeypatch.setattr(notify, "HTTP", FakeHTTP([Resp(429, retry_after=2), Resp(200)]))
-    assert real_telegram_post("sendMessage", {"text": "hi"}, {"telegram_bot_id": "b", "telegram_chat_id": "c"}) is True
+    responses[:] = [Resp(429, retry_after=2), Resp(200)]
+    assert real_telegram_post("sendMessage", {"text": "hi"}) is True
     assert len(calls) == 2 and sleeps == [2]
 
     # Blijvend 429 -> na 3 pogingen opgeven
     calls.clear()
     sleeps.clear()
-    monkeypatch.setattr(notify, "HTTP", FakeHTTP([Resp(429, retry_after=1)] * 3))
-    assert real_telegram_post("sendMessage", {"text": "hi"}, {"telegram_bot_id": "b", "telegram_chat_id": "c"}) is False
+    responses[:] = [Resp(429, retry_after=1)] * 3
+    assert real_telegram_post("sendMessage", {"text": "hi"}) is False
     assert len(calls) == 3 and sleeps == [1, 1]
 
     # Andere fout -> direct opgeven, geen retry
     calls.clear()
-    monkeypatch.setattr(notify, "HTTP", FakeHTTP([Resp(400)]))
-    assert real_telegram_post("sendMessage", {"text": "hi"}, {"telegram_bot_id": "b", "telegram_chat_id": "c"}) is False
+    responses[:] = [Resp(400)]
+    assert real_telegram_post("sendMessage", {"text": "hi"}) is False
     assert len(calls) == 1
 
 
@@ -402,31 +402,27 @@ def test_marketplace_override_per_keyword(monkeypatch, telegram_log, keyword):
         return [_ad("o1", "Koersfiets", 1000)]
     monkeypatch.setattr(marketplace, "fetch_market_results", fake_fetch)
 
-    sent_to = []
-    monkeypatch.setattr(notify, "_telegram_post", lambda method, payload, settings, label="": sent_to.append(settings["telegram_chat_id"]) or True)
-    scheduler.run_search_for_keyword(kw, _settings(marketplace="marktplaats", telegram_chat_id="123"))
+    scheduler.run_search_for_keyword(kw, _settings(marketplace="marktplaats"))
     assert seen["marketplace"] == "2dehands"
-    assert sent_to == ["123"]  # chat komt uit de globale configuratie
+    assert len(telegram_log) == 1
 
-    merged = scheduler.keyword_settings({"marketplace": ""}, {"marketplace": "marktplaats", "telegram_chat_id": "123"})
-    assert merged["marketplace"] == "marktplaats" and merged["telegram_chat_id"] == "123"
+    merged = scheduler.keyword_settings({"marketplace": ""}, {"marketplace": "marktplaats"})
+    assert merged["marketplace"] == "marktplaats"
 
 
 def test_telegram_sends_to_all_chat_ids(monkeypatch, real_telegram_post):
+    import store
+
     class Resp:
-        status_code, ok, text = 200, True, "ok"
+        status_code = 200
 
     posted = []
-
-    class FakeHTTP:
-        def post(self, url, json=None, timeout=10):
-            posted.append(json["chat_id"])
-            return Resp()
-    monkeypatch.setattr(notify, "HTTP", FakeHTTP())
-    assert notify.parse_chat_ids(" 12, -34;56  78 ,12") == ["12", "-34", "56", "78"]
-    assert real_telegram_post("sendMessage", {"text": "hi"}, {"telegram_bot_id": "b", "telegram_chat_id": "12, -34"}) is True
+    monkeypatch.setattr(notify.requests, "post", lambda url, json=None, timeout=10: posted.append(json["chat_id"]) or Resp())
+    assert notify.chat_ids(" 12, -34;56  78 ,12") == ["12", "-34", "56", "78"]
+    assert real_telegram_post("sendMessage", {"text": "hi"}) is True
     assert posted == ["12", "-34"]
-    assert real_telegram_post("sendMessage", {"text": "hi"}, {"telegram_bot_id": "b", "telegram_chat_id": ""}) is False
+    store.save_settings({"telegram_chat_id": ""})
+    assert real_telegram_post("sendMessage", {"text": "hi"}) is False
 
 
 # --- v26: relevantiefilter in de zoekactie -----------------------------------

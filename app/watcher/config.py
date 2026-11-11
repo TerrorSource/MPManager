@@ -3,6 +3,8 @@ import logging
 import os
 from pathlib import Path
 
+import store
+
 # Meldingen gaan naar het log van MPManager (app.py hangt daar een handler aan).
 logger = logging.getLogger("mpmanager.watcher")
 logger.setLevel(logging.INFO)
@@ -31,56 +33,20 @@ SEARCH_SPACING_SECONDS = 5
 # De schrijftest in /health wordt zo lang gecachet (scheelt schrijfacties op de NAS).
 CONFIG_CHECK_TTL_SECONDS = 300
 
-# Maximaal aantal regels in een Telegram-samenvatting (digest).
-DIGEST_MAX_ITEMS = 20
-
 # Bij een subcategorie-filter (dat de API niet zelf toepast) halen we meer
 # advertenties op en filteren we lokaal; dit is de factor en het plafond.
 CATEGORY_OVERSAMPLE = 3
 CATEGORY_MAX_FETCH = 60
 
-DEFAULT_SETTINGS = {
-    "marketplace": "marktplaats",  # marktplaats | 2dehands
-    "default_interval_minutes": 15,
-    "default_limit_per_run": 5,
-
-    "sleep_mode": False,
-    "sleep_start": "23:00",
-    "sleep_end": "07:00",
-
-    "postcode": "",
-    "radius_km": "alle",
-
-    "telegram_bot_id": "",
-    "telegram_chat_id": "",
-    "manual_telegram": False,
-    "price_drop_alerts": True,
-    # Vanaf dit aantal nieuwe advertenties in één run één samenvattend
-    # bericht i.p.v. losse meldingen (0 = altijd losse meldingen).
-    "telegram_digest_threshold": 5,
-
-    # Herplaatsingen (zelfde titel/verkoper/prijs met nieuw id) binnen dit
-    # aantal dagen niet opnieuw melden (0 = uit).
-    "repost_dedup_days": 30,
-
-    # Gereserveerde advertenties overslaan (meestal al verkocht)
-    "skip_reserved": False,
-
-    # Relevantiefilter: de marketplace zoekt 'fuzzy' ("cardiff marathon" geeft
-    # alles met "marathon"). Modes:
-    #   text  = alle woorden van de zoekterm moeten in titel + omschrijving staan
-    #   title = alle woorden moeten in de titel staan (strenger)
-    #   off   = alles wat de marketplace teruggeeft (oude gedrag)
-    "match_mode": "text",
-
-    # Advertenties van de afgelopen N dagen dagelijks controleren op
-    # verwijderd/verlopen (0 = uit).
-    "expiry_check_days": 7,
-
-    # Blocklists (een lege lijst = uit)
-    "blocked_sellers": [],
-    "blocked_titles": [],
-}
+# De instellingen van de zoekopdrachten staan, met alle andere, in het ene
+# schema van MPManager (store.SCHEMA). Dit zijn de namen die hier gebruikt worden.
+SETTING_KEYS = (
+    "marketplace", "default_interval_minutes", "default_limit_per_run", "match_mode",
+    "repost_dedup_days", "expiry_check_days", "skip_reserved", "postcode", "radius_km",
+    "sleep_mode", "sleep_start", "sleep_end", "price_drop_alerts", "telegram_digest_threshold",
+    "manual_telegram", "blocked_sellers", "blocked_titles",
+)
+DEFAULT_SETTINGS = {key: store.DEFAULTS[key] for key in SETTING_KEYS}
 
 # Controle op verlopen advertenties: hoe vaak, en hoeveel per ronde.
 EXPIRY_CHECK_INTERVAL_HOURS = 24

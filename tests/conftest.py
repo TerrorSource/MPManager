@@ -13,15 +13,15 @@ os.environ["MPWATCHER_DISABLE_WORKER"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 
+import notify as _notify  # noqa: E402
 from watcher import db as _db  # noqa: E402
 from watcher import marketplace as _marketplace  # noqa: E402
-from watcher import notify as _notify  # noqa: E402
 
 _db.init_db()
 
 # De echte functies, voor tests die de client zelf willen testen (met gemockte HTTP).
 _REAL_FETCH_MARKET_RESULTS = _marketplace.fetch_market_results
-_REAL_TELEGRAM_POST = _notify._telegram_post
+_REAL_TELEGRAM_POST = _notify.post
 
 
 @pytest.fixture()
@@ -30,18 +30,24 @@ def real_fetch_market_results():
 
 
 @pytest.fixture()
-def real_telegram_post():
-    return _REAL_TELEGRAM_POST
+def real_telegram_post(monkeypatch):
+    """De echte verzendfunctie, met een bot en twee ontvangers ingesteld."""
+    import store
+    monkeypatch.setattr(_notify, "get_token", lambda: "bot")
+    store.save_settings({"telegram_chat_id": "12, -34"})
+    yield _REAL_TELEGRAM_POST
+    store.save_settings({"telegram_chat_id": ""})
 
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     """Geen echte calls naar Marktplaats/Telegram vanuit de tests."""
-    from watcher import marketplace, notify
+    import notify
+    from watcher import marketplace
 
     monkeypatch.setattr(
         marketplace, "fetch_market_results",
         lambda term, settings, limit, category_id=None, category_parent_id=None: [],
     )
     monkeypatch.setattr(marketplace, "fetch_seller_from_ad_page", lambda url: "")
-    monkeypatch.setattr(notify, "_telegram_post", lambda method, payload, settings, label="": True)
+    monkeypatch.setattr(notify, "post", lambda method, payload, label="": True)

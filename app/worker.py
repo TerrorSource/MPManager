@@ -1,10 +1,11 @@
 """
-The work itself (backup, place, repost, delete), a queue that does it one at a
-time, and a scheduler that fills the queue on its own.
+The work itself (backup, place, repost, change a price, delete), a queue that
+does it one at a time, and a scheduler that fills the queue on its own.
 
-Everything towards Marktplaats that changes something goes through the queue.
-A clicked repost first waits a random while, so clicks never arrive as a burst;
-automatic reposts are spaced further apart.
+Everything towards the site that changes something goes through the queue. A
+clicked job first waits a random while, so clicks never arrive as a burst;
+automatic reposts are spaced further apart. The queue is kept on disk, so a
+job that was waiting is still there after a restart.
 """
 import itertools
 import random
@@ -19,9 +20,11 @@ from store import log
 
 client = None                # set by app.py
 
-KINDS = {"backup": "Backup", "repost": "Herplaatsen", "repost_adjust": "Herplaatsen + aanpassen", "auto_repost": "Automatisch herplaatsen",
+KINDS = {"backup": "Backup", "repost": "Herplaatsen", "repost_adjust": "Herplaatsen + aanpassen",
+         "auto_repost": "Automatisch herplaatsen", "price": "Prijs aanpassen",
          "place": "Plaatsen uit backup", "delete": "Verwijderen"}
-HOLD = {"repost", "repost_adjust", "place", "delete"}          # kinds that wait before they run
+HOLD = {"repost", "repost_adjust", "price", "place", "delete"}     # kinds that wait before they run
+RESTART_GRACE = 30                            # a restored job runs no sooner than this after the start
 CHECK_INTERVAL = 3600                         # how often the scheduler looks at the ads
 TICK = 20
 
@@ -35,7 +38,7 @@ _wake = threading.Event()
 
 def do_backup(item_id):
     meta = store.save_backup(client, client.read_ad(item_id))
-    note = " (onvolledig: niet meer te wijzigen op Marktplaats)" if meta["partial"] else ""
+    note = " (onvolledig: niet meer te wijzigen op de site)" if meta["partial"] else ""
     log(f"Backup van {item_id} '{meta['title']}': {len(meta['photos'])} foto's{note}.")
     return meta
 
@@ -67,6 +70,9 @@ def do_place(item_id, price=None, min_bid=None):
         fields = dict(result["fields"])
         shown = f" voor {fields['price.value']}" if "price.value" in fields else ""
         log(f"PROEF: '{ad['title']}' zou geplaatst worden{shown} met {len(result['fields'])} velden; niets verstuurd.")
+    elif result.get("confirmed_by") == "list":
+        log(f"Geplaatst: '{ad['title']}' als {result['item_id']}. Er kwam geen antwoord op het plaatsen, "
+            "maar de advertentie staat in je advertentielijst.")
     else:
         log(f"Geplaatst: '{ad['title']}' als {result['item_id']}.")
     return ad, result
@@ -131,13 +137,33 @@ def do_restore(item_id):
     return f"geplaatst als {result['item_id']}"
 
 
+def do_price(item_id, price, min_bid=None):
+    """Another price on the ad itself: it keeps its views, favourites and place in the list."""
+    do_backup(item_id)                    # how it was, before anything changes
+    ad = store.load_backup(item_id)
+    note = change_note(ad, price, min_bid)
+    dry = store.settings()["dry_run"]
+    client.update_price(item_id, price, min_bid, dry_run=dry)
+    if dry:
+        log(f"PROEF: de prijs van '{ad['title']}' zou aangepast worden ({note}); niets verstuurd.")
+        return f"proef: voorbereid, niets verstuurd ({note})"
+    store.record("prijs aangepast", ad["title"], item_id, None, note)
+    log(f"Prijs van '{ad['title']}' aangepast: {note}.")
+    later = _backup_new(item_id)
+    try:
+        notify.price_changed(ad["title"], note)
+    except Exception as e:
+        log(f"Telegram-melding niet verstuurd: {type(e).__name__}")
+    return f"prijs aangepast ({note})" + (f"; {later}" if later else "")
+
+
 def do_delete(item_id):
     if store.settings()["dry_run"]:
         log(f"PROEF: {item_id} zou verwijderd worden; niets verstuurd.")
         return "proef: niets verwijderd"
     client.delete(item_id)
     store.record("verwijderd", (store.read_meta(item_id) or {}).get("title") or item_id, item_id)
-    log(f"Advertentie {item_id} verwijderd van Marktplaats.")
+    log(f"Advertentie {item_id} verwijderd van {client.site_name}.")
     return "verwijderd"
 
 
@@ -147,12 +173,53 @@ def _run(job):
         return f"{len(do_backup(item_id)['photos'])} foto's"
     if kind in ("repost", "repost_adjust", "auto_repost"):
         return do_repost(item_id, job.get("price"), job.get("min_bid"))
+    if kind == "price":
+        return do_price(item_id, job.get("price"), job.get("min_bid"))
     if kind == "place":
         return do_restore(item_id)
     return do_delete(item_id)
 
 
 # ---- the queue -----------------------------------------------------------
+
+def _save():
+    """Call with _lock held."""
+    store.save_queue(sorted(_jobs.values(), key=lambda j: j["id"]))
+
+
+def _set(job, **changes):
+    with _lock:
+        job.update(changes)
+        _save()
+
+
+def restore():
+    """
+    Pick the queue up where the previous run left it. What was waiting still
+    waits. What was in the middle of changing something on the site is not
+    run again (it might have gone through): it is reported, to be looked at.
+    """
+    global _ids
+    now, waiting, cut_off = time.time(), 0, 0
+    with _lock:
+        for job in store.load_queue():
+            if job.get("status") == "bezig":
+                if job["kind"] == "backup":
+                    job.update(status="wacht", run_at=now)
+                else:
+                    job.update(status="mislukt", finished=now,
+                               message="onderbroken door een herstart; kijk op de site of het is uitgevoerd")
+                    cut_off += 1
+            if job.get("status") == "wacht":
+                job["run_at"] = max(job.get("run_at") or 0, now + RESTART_GRACE)
+                waiting += 1
+            _jobs[job["id"]] = job
+        _ids = itertools.count(max(_jobs, default=0) + 1)
+        if _jobs:
+            _save()
+    if waiting or cut_off:
+        log(f"Wachtrij hersteld na herstart: {waiting} wachtend" + (f", {cut_off} onderbroken (zie Wachtrij)." if cut_off else "."))
+
 
 def enqueue(kind, item_id, title=None, delay=None, price=None, min_bid=None):
     """Add a job, unless this ad already has one waiting or running."""
@@ -174,8 +241,21 @@ def enqueue(kind, item_id, title=None, delay=None, price=None, min_bid=None):
         for old in sorted(_jobs)[:-100]:
             if _jobs[old]["status"] not in ("wacht", "bezig"):
                 del _jobs[old]
+        _save()
     _wake.set()
     return job
+
+
+def enqueue_many(kind, items):
+    """Several ads at once, one after the other: each waits its own random while after the one before."""
+    s = store.settings()
+    hold = kind in HOLD and not s["dry_run"]
+    delay, queued = 0, []
+    for item_id, title in items:
+        if hold:
+            delay += random.uniform(s["manual_delay_min"], s["manual_delay_max"])
+        queued.append(enqueue(kind, item_id, title, delay=delay))
+    return queued
 
 
 def cancel(job_id):
@@ -184,6 +264,7 @@ def cancel(job_id):
         if not job or job["status"] != "wacht":
             return False
         job.update(status="geannuleerd", message="")
+        _save()
     log(f"Geannuleerd: {job['label'].lower()} van '{job['title']}'.")
     return True
 
@@ -205,6 +286,7 @@ def _next_job():
         if due:
             job = min(due, key=lambda j: (j["run_at"], j["id"]))
             job["status"] = "bezig"
+            _save()
             return job, 0
         return None, min((j["run_at"] - time.time() for j in waiting), default=TICK)
 
@@ -217,17 +299,15 @@ def _worker():
             _wake.wait(min(max(wait, 0.5), TICK))
             continue
         try:
-            job["message"] = _run(job)
-            job["status"] = "klaar"
+            _set(job, message=_run(job), status="klaar", finished=time.time())
         except (MarktplaatsError, AuthError) as e:
             _fail(job, e.args[0], login=isinstance(e, AuthError))
         except Exception as e:                    # a bug must not kill the queue
             _fail(job, f"onverwachte fout: {type(e).__name__}: {e}")
-        job["finished"] = time.time()
 
 
 def _fail(job, message, login=False):
-    job.update(status="mislukt", message=message)
+    _set(job, status="mislukt", message=message, finished=time.time())
     log(f"FOUT: {job['label'].lower()} van '{job['title']}': {message}")
     if login:
         notify.login_problem(message)
@@ -298,7 +378,7 @@ def _scan():
     s = store.settings()
     listings = client.listings()
     if s["auto_backup"]:
-        # A backup without photos (made before Marktplaats had processed them) counts as missing.
+        # A backup without photos (made before the site had processed them) counts as missing.
         backed = {m["item_id"] for m in store.list_backups() if m.get("photos") and not m.get("partial")}
         for raw in listings:
             if raw.get("itemId") not in backed:
@@ -311,7 +391,7 @@ def _scan():
 def _scheduler():
     """
     Wakes often, so a change in Settings takes effect soon, but only looks at
-    Marktplaats once per CHECK_INTERVAL (or right after a relevant change).
+    the site once per CHECK_INTERVAL (or right after a relevant change).
     """
     last_scan, last_state, login_reported = 0.0, None, False
     time.sleep(10)
@@ -327,7 +407,7 @@ def _scheduler():
                     log("Automatisch herplaatsen uit.")
                 last_state, last_scan = state, 0.0
             if (s["auto_backup"] or s["auto_repost"] or s["backup_retention_days"]) and \
-                    time.time() - last_scan >= CHECK_INTERVAL and client.has_cookies():
+                    time.time() - last_scan >= CHECK_INTERVAL and client.has_login():
                 last_scan = time.time()
                 _scan()
                 login_reported = False
@@ -342,5 +422,6 @@ def _scheduler():
 
 
 def start():
+    restore()
     threading.Thread(target=_worker, daemon=True, name="worker").start()
     threading.Thread(target=_scheduler, daemon=True, name="scheduler").start()

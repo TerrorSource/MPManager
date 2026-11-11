@@ -5,9 +5,10 @@ import time as time_module
 from datetime import datetime, time, timedelta
 from typing import Optional
 
+import notify
+
 from . import db
 from . import marketplace as mp
-from . import notify
 from .config import (
     BACKOFF_MAX_HOURS,
     EXPIRY_CHECK_BATCH,
@@ -225,7 +226,7 @@ def run_search_for_keyword(keyword: dict, settings: dict, manual: bool = False) 
     if notify_on:
         for ad, old_c, new_c in price_drops:
             logger.info("Prijsverlaging voor '%s': %s -> %s", ad.get("title"), format_cents(old_c), format_cents(new_c))
-            sent = notify.send_telegram_price_drop(ad, old_c, new_c, settings, term=term)
+            sent = notify.search_price_drop(ad, old_c, new_c, term=term)
             db.log_notification("price_drop", kid, term, ad, detail=f"{format_cents(old_c)} → {format_cents(new_c)}", sent=sent)
 
         to_notify: list[dict] = []
@@ -243,13 +244,13 @@ def run_search_for_keyword(keyword: dict, settings: dict, manual: bool = False) 
         digest_threshold = int(settings.get("telegram_digest_threshold") or 0)
         if digest_threshold and len(to_notify) >= digest_threshold:
             logger.info("%s nieuwe advertenties voor '%s' als samenvatting gemeld", len(to_notify), term)
-            sent = notify.send_telegram_digest(term, to_notify, settings)
+            sent = notify.search_digest(term, to_notify)
             db.log_notification("digest", kid, term, detail=f"{len(to_notify)} advertenties in één samenvatting", sent=sent)
             for ad in to_notify:
                 db.log_notification("new", kid, term, ad, detail="in samenvatting", sent=sent)
         else:
             for ad in to_notify:
-                sent = notify.send_telegram_ad(ad, settings, term=term)
+                sent = notify.search_ad(ad, term=term)
                 db.log_notification("new", kid, term, ad, sent=sent)
     elif new_ads:
         for ad in new_ads:

@@ -1,23 +1,25 @@
 """
-Marktplaats over plain HTTP: no browser involved.
+Marktplaats and 2dehands over plain HTTP: no browser involved.
 
-Everything the site's own pages need is embedded in them as JSON
-(window.__CONFIG__), so reading an ad is one GET and placing one is the same
-form POST the browser sends:
+Both sites run on the same software, so everything here works on either; which
+one is used is chosen when logging in. Everything the site's own pages need is
+embedded in them as JSON (window.__CONFIG__), so reading an ad is one GET and
+placing one is the same form POST the browser sends:
 
   /my-account/sell/api/listings   the list of your ads
   /seller/view/<id>               one ad as shown to its owner
-  /plaats/<id>/edit               the same ad as form values (what gets re-posted)
+  /plaats/<id>/edit               the same ad as form values (what gets re-posted),
+                                  and where a changed price is saved
   /plaats/<l1>/<l2>?bucketId=..   an empty form with fresh tokens
   /plaats/api/image/upload        photo upload
   /plaats/ads                     the form POST that creates the ad
   /seller/api/delete-ad           delete
 
-The login is the pair of cookies MpSecurity + MpSslSecurity. They come from
-logging in here with e-mail, password and (if set) the SMS code, the same JSON
-calls the login page makes; or pasted from a browser as a fallback. They stay
-valid for months. The SMS code is passed on and never stored; the password
-only when asked to, so an expired session can renew itself.
+The login is a set of cookies. They come from logging in here with e-mail,
+password and (if set) the SMS code, the same JSON calls the login page makes;
+or pasted from a browser as a fallback. They stay valid for months. The SMS
+code is passed on and never stored; the password only when asked to, so an
+expired session can renew itself.
 
 Everything kept on disk (cookies, password) is in one file, encrypted with a key
 that lives outside the config folder: SECRET_KEY, or a generated key file.
@@ -38,14 +40,21 @@ import time
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
-BASE = "https://www.marktplaats.nl"
+SITES = {
+    "marktplaats": {"name": "Marktplaats", "base": "https://www.marktplaats.nl", "domain": ".marktplaats.nl",
+                    "language": "nl-NL,nl;q=0.9,en;q=0.8"},
+    "2dehands": {"name": "2dehands", "base": "https://www.2dehands.be", "domain": ".2dehands.be",
+                 "language": "nl-BE,nl;q=0.9,en;q=0.8"},
+}
 USER_AGENT = os.environ.get(
     "USER_AGENT",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
 )
-LOGIN_COOKIES = ("MpSecurity", "MpSslSecurity")
+LOGIN_COOKIES = ("MpSecurity", "MpSslSecurity")      # what to copy when pasting cookies from a browser
 TIMEOUT = 30
+LOGIN_CHECK_TTL = 60              # the page asks "logged in?" often; the site is asked at most this often
+PLACED_CHECKS = (5, 15, 30)       # seconds between looks at the ad list when placing got no answer
 # Reads are tried again after a dropped connection; writes never are: a
 # placement that is sent twice would put the ad online twice.
 READ_RETRIES = (2, 5)             # seconds to wait before attempt 2 and 3
@@ -98,12 +107,12 @@ LOGIN_ERRORS = {
     "WRONG_USERNAME_PASSWORD": "E-mailadres of wachtwoord klopt niet.",
     "AUTHENTICATION_FAILED": "E-mailadres of wachtwoord klopt niet.",
     "VERIFICATION_FAILED": "De code klopt niet.",
-    "VERIFICATION_CODE_BLOCKED": "Marktplaats heeft verificatiecodes tijdelijk geblokkeerd na te veel pogingen. Probeer het later opnieuw.",
-    "VERIFICATION_REQUESTS_BLOCKED": "Marktplaats heeft verificatiecodes tijdelijk geblokkeerd na te veel pogingen. Probeer het later opnieuw.",
-    "TWO_FACTOR_AUTH_SETUP_REQUIRED": "Marktplaats wil dat je eerst een telefoonnummer instelt. Doe dat eenmalig op marktplaats.nl.",
-    "CONFIRMATION_REQUIRED": "Marktplaats wil eerst een bevestiging van je account. Log eenmalig in op marktplaats.nl.",
-    "FORCE_PASSWORD_RESET": "Marktplaats eist een nieuw wachtwoord. Stel dat eerst in op marktplaats.nl.",
-    "CREDENTIALS_MUST_BE_UPDATED": "Marktplaats eist een nieuw wachtwoord. Stel dat eerst in op marktplaats.nl.",
+    "VERIFICATION_CODE_BLOCKED": "{site} heeft verificatiecodes tijdelijk geblokkeerd na te veel pogingen. Probeer het later opnieuw.",
+    "VERIFICATION_REQUESTS_BLOCKED": "{site} heeft verificatiecodes tijdelijk geblokkeerd na te veel pogingen. Probeer het later opnieuw.",
+    "TWO_FACTOR_AUTH_SETUP_REQUIRED": "{site} wil dat je eerst een telefoonnummer instelt. Doe dat eenmalig op de site zelf.",
+    "CONFIRMATION_REQUIRED": "{site} wil eerst een bevestiging van je account. Log eenmalig in op de site zelf.",
+    "FORCE_PASSWORD_RESET": "{site} eist een nieuw wachtwoord. Stel dat eerst in op de site zelf.",
+    "CREDENTIALS_MUST_BE_UPDATED": "{site} eist een nieuw wachtwoord. Stel dat eerst in op de site zelf.",
 }
 PENDING_TTL = 600        # how long a login waits for its SMS code
 RELOGIN_PAUSE = 900      # never hammer the login with a saved password
@@ -129,7 +138,7 @@ def _cipher():
 
 
 def page_config(html, name="__CONFIG__"):
-    """The JSON a Marktplaats page ships in window.__CONFIG__ (or a sibling)."""
+    """The JSON a page of the site ships in window.__CONFIG__ (or a sibling)."""
     m = re.search(r"window\.%s\s*=\s*" % name, html)
     if not m:
         return None
@@ -148,19 +157,27 @@ class Marktplaats:
     def __init__(self, state_path):
         self.state_path = state_path
         self._lock = threading.Lock()
+        self.site = "marktplaats"     # which of SITES the login is for
         self.http = requests.Session()
-        self.http.headers.update({
-            "User-Agent": USER_AGENT,
-            "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
-        })
+        self.http.headers.update({"User-Agent": USER_AGENT, "Accept-Language": SITES[self.site]["language"]})
+        self._authenticated = False   # a login was accepted and not thrown away since
         self._saved = None            # what the state file holds right now
         self._credentials = None      # {'email', 'password'}, only if the user asked to keep them
         self._secrets = {}            # other things worth encrypting, e.g. the Telegram bot token
         self._pending = None          # a login that is waiting for its SMS code
         self._last_relogin = 0
+        self._checked = (0, False)    # when the site last answered "logged in?", and what
         self.state_error = None
         self._cipher = _cipher()
         self._load()
+
+    @property
+    def base(self):
+        return SITES[self.site]["base"]
+
+    @property
+    def site_name(self):
+        return SITES[self.site]["name"]
 
     # ---- session ---------------------------------------------------------
 
@@ -169,33 +186,36 @@ class Marktplaats:
             return
         try:
             with open(self.state_path) as f:
-                data = json.load(f)
-            legacy = "enc" not in data          # written before encryption existed
-            if not legacy:
-                data = json.loads(self._cipher.decrypt(data["enc"].encode()))
+                data = json.loads(self._cipher.decrypt(json.load(f)["enc"].encode()))
         except InvalidToken:
             self.state_error = "De opgeslagen login is met een andere sleutel versleuteld en niet te lezen. Log opnieuw in."
             return
-        except (ValueError, OSError, KeyError):
+        except (ValueError, OSError, KeyError, TypeError):
             return
-        self._set_cookies(data.get("cookies") or {})
+        self.site = data.get("site") if data.get("site") in SITES else "marktplaats"
+        cookies = data.get("cookies") or {}
+        self._set_cookies(cookies)
+        # states from before the flag existed: the two login cookies say it
+        self._authenticated = bool(data.get("authenticated", all(cookies.get(n) for n in LOGIN_COOKIES)))
         self._credentials = data.get("credentials") or None
         self._secrets = data.get("secrets") or {}
-        if not legacy:
-            self._saved = self._state()
-        self._persist()
+        self._saved = self._state()
 
     def _set_cookies(self, cookies):
         self.http.cookies.clear()
+        self.http.headers["Accept-Language"] = SITES[self.site]["language"]
         for name, value in cookies.items():
-            self.http.cookies.set(name, value, domain=".marktplaats.nl", path="/")
+            self.http.cookies.set(name, value, domain=SITES[self.site]["domain"], path="/")
+
+    def _cookies(self):
+        return {c.name: c.value for c in self.http.cookies}
 
     def _state(self):
-        return {"cookies": {c.name: c.value for c in self.http.cookies},
+        return {"site": self.site, "authenticated": self._authenticated, "cookies": self._cookies(),
                 "credentials": self._credentials, "secrets": dict(self._secrets)}
 
     def _persist(self):
-        """Marktplaats may hand out renewed cookies; keep whatever is current."""
+        """The site may hand out renewed cookies; keep whatever is current."""
         state = self._state()
         if state == self._saved:
             return
@@ -231,18 +251,35 @@ class Marktplaats:
     def saved_email(self):
         return (self._credentials or {}).get("email")
 
-    def has_cookies(self):
-        return all(self.http.cookies.get(n) for n in LOGIN_COOKIES)
+    def has_login(self):
+        """A login is stored. Whether the site still accepts it is logged_in()."""
+        return self._authenticated
 
-    def set_cookies(self, cookies):
-        missing = [n for n in LOGIN_COOKIES if not cookies.get(n)]
-        if missing:
-            raise AuthError(f"Deze cookies ontbreken: {', '.join(missing)}")
-        previous = {c.name: c.value for c in self.http.cookies}
+    def _accepted(self):
+        """Ask the site whether the cookies in hand are a logged-in session."""
+        try:
+            r = self.http.get(f"{self.base}/my-account/sell/api/listings",
+                              params={"batchNumber": 1, "batchSize": 1},
+                              headers={"Accept": "application/json"}, timeout=TIMEOUT)
+        except requests.RequestException:
+            return False
+        return r.status_code == 200
+
+    def set_cookies(self, cookies, site=None):
+        """Take over a session (from logging in, or pasted), if the site accepts it."""
+        if site is not None and site not in SITES:
+            raise AuthError("Onbekende site.")
+        if not cookies:
+            raise AuthError("Geen cookies gevonden in wat je plakte.")
+        previous = (self.site, self._cookies(), self._authenticated)
+        self.site = site or self.site
         self._set_cookies(cookies)
-        if not self.logged_in():
-            self._set_cookies(previous)       # a failed attempt must not cost a working login
-            raise AuthError("Marktplaats accepteert deze login niet (verlopen of onvolledig).")
+        if not self._accepted():
+            self.site = previous[0]           # a failed attempt must not cost a working login
+            self._set_cookies(previous[1])
+            raise AuthError(f"{SITES[site or previous[0]]['name']} accepteert deze login niet (verlopen of onvolledig).")
+        self._authenticated = True
+        self._checked = (time.time(), True)
         self._persist()
 
     # ---- logging in ------------------------------------------------------
@@ -255,11 +292,12 @@ class Marktplaats:
     def _identity_post(self, s, path, xsrf, payload, referer):
         """One call of the login pages' own API. Returns (ok, error code, body)."""
         try:
-            r = s.post(BASE + path, json=payload, timeout=TIMEOUT,
-                       headers={"x-mp-xsrf": xsrf, "Origin": BASE, "Referer": referer,
+            base = referer.split("/identity/")[0]
+            r = s.post(base + path, json=payload, timeout=TIMEOUT,
+                       headers={"x-mp-xsrf": xsrf, "Origin": base, "Referer": referer,
                                 "Accept": "application/json"})
         except requests.RequestException as e:
-            raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+            raise MarktplaatsError(f"De site is niet bereikbaar: {type(e).__name__}") from e
         try:
             body = r.json()
         except ValueError:
@@ -269,37 +307,45 @@ class Marktplaats:
         code = body.get("code") if isinstance(body.get("code"), str) else None
         return 200 <= r.status_code < 300, code or f"HTTP_{r.status_code}", body
 
-    def _adopt(self, s, keep=None):
+    def _adopt(self, s, site, keep=None):
         """Take over a session that just logged in."""
         cookies = {c.name: c.value for c in s.cookies}
         self._pending = None
-        if keep:
-            self._credentials = keep
         try:
-            self.set_cookies(cookies)
+            self.set_cookies(cookies, site)
         except AuthError as e:
             raise AuthError(e.args[0], f"na inloggen: cookies {sorted(cookies)}") from e
+        # a password kept for the other site, or for another account, is not this login's
+        self._credentials = keep
+        self._persist()
 
-    def _login_error(self, step, code, body):
-        # What came back, without values: enough to see where Marktplaats stopped us.
+    def _login_error(self, step, code, body, site):
+        # What came back, without values: enough to see where the site stopped us.
         detail = f"{step}: {code}, velden {sorted(body.keys())}"
-        return AuthError(LOGIN_ERRORS.get(code) or f"Inloggen mislukt ({code}).", detail)
+        text = LOGIN_ERRORS.get(code) or f"Inloggen mislukt ({code})."
+        return AuthError(text.format(site=SITES[site]["name"]), detail)
 
-    def login(self, email, password, remember=False):
+    def login(self, email, password, remember=False, site=None):
         """
-        Returns {'logged_in': True}, or {'need_code': True, 'phone': '***123'}
-        when Marktplaats has sent an SMS code; finish that with login_code().
+        Log in on `site` (default: the site of the current login). Returns
+        {'logged_in': True}, or {'need_code': True, 'phone': '***123'} when an
+        SMS code has been sent; finish that with login_code().
         """
+        site = site or self.site
+        if site not in SITES:
+            raise AuthError("Onbekende site.")
+        name, base = SITES[site]["name"], SITES[site]["base"]
         s = self._new_session()
-        url = f"{BASE}/identity/v2/login"
+        s.headers["Accept-Language"] = SITES[site]["language"]
+        url = f"{base}/identity/v2/login"
         try:
             page = s.get(url, headers={"Accept": "text/html"}, timeout=TIMEOUT)
         except requests.RequestException as e:
-            raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+            raise MarktplaatsError(f"{name} is niet bereikbaar: {type(e).__name__}") from e
         env = page_config(page.text, "__ENV_CONFIG__") or {}
         xsrf = env.get("xsrfToken")
         if page.status_code != 200 or not xsrf:
-            raise MarktplaatsError(f"Loginpagina van Marktplaats niet leesbaar (status {page.status_code}).")
+            raise MarktplaatsError(f"Loginpagina van {name} niet leesbaar (status {page.status_code}).")
 
         ok, code, body = self._identity_post(
             s, "/identity/v2/api/login", xsrf, referer=url,
@@ -307,23 +353,23 @@ class Marktplaats:
                      "threatMetrix": env.get("threatMetrix") or {}})
         keep = {"email": email, "password": password} if remember else None
         if ok:
-            self._adopt(s, keep)
+            self._adopt(s, site, keep)
             return {"logged_in": True}
         if code != "TWO_FACTOR_AUTH_NEEDED":
-            raise self._login_error("wachtwoordstap", code, body)
+            raise self._login_error("wachtwoordstap", code, body, site)
 
         key = (body.get("verification") or {}).get("id")
         if not key:
-            raise self._login_error("wachtwoordstap zonder verificatie-id", code, body)
-        challenge = f"{BASE}/identity/v2/two-factor-auth-setup/challenge?key={key}&success_url=/&flow=login"
+            raise self._login_error("wachtwoordstap zonder verificatie-id", code, body, site)
+        challenge = f"{base}/identity/v2/two-factor-auth-setup/challenge?key={key}&success_url=/&flow=login"
         try:
             cpage = s.get(challenge, headers={"Accept": "text/html", "Referer": url}, timeout=TIMEOUT)
         except requests.RequestException as e:
-            raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+            raise MarktplaatsError(f"{name} is niet bereikbaar: {type(e).__name__}") from e
         cenv = page_config(cpage.text, "__ENV_CONFIG__") or {}
         phone = (cenv.get("userDetails") or {}).get("twoAuthPhoneNumber") or cenv.get("tamperedRecoveryPhoneNumber") or ""
         self._pending = {
-            "session": s, "referer": challenge, "ts": time.time(), "keep": keep,
+            "session": s, "referer": challenge, "ts": time.time(), "keep": keep, "site": site,
             "xsrf": cenv.get("xsrfToken") or (page_config(cpage.text, "__HEADER_CONFIG__") or {}).get("xsrfToken") or xsrf,
             "request_id": cenv.get("twoFactorAuthRequestId") or key,
             # an account that already has a phone number verifies; a new one activates
@@ -345,8 +391,8 @@ class Marktplaats:
             p["session"], f"/identity/v2/api/two-factor-auth/{path}", p["xsrf"], referer=p["referer"],
             payload={"code": re.sub(r"\D", "", code), "requestId": p["request_id"]})
         if not ok:
-            raise self._login_error("codestap", err, body)
-        self._adopt(p["session"], p["keep"])
+            raise self._login_error("codestap", err, body, p["site"])
+        self._adopt(p["session"], p["site"], p["keep"])
         return {"logged_in": True}
 
     def login_resend(self):
@@ -355,7 +401,7 @@ class Marktplaats:
             p["session"], "/identity/v2/api/two-factor-auth/resend-code", p["xsrf"], referer=p["referer"],
             payload={"requestId": p["request_id"]})
         if not ok:
-            raise self._login_error("code opnieuw sturen", err, body)
+            raise self._login_error("code opnieuw sturen", err, body, p["site"])
         return {"sent": True}
 
     def _relogin(self):
@@ -369,7 +415,7 @@ class Marktplaats:
         self._last_relogin = time.time()
         creds = self._credentials
         try:
-            result = self.login(creds["email"], creds["password"], remember=True)
+            result = self.login(creds["email"], creds["password"], remember=True, site=self.site)
         except AuthError as e:
             if len(e.args) > 1 and "WRONG_USERNAME_PASSWORD" in e.args[1]:
                 self.forget_password()
@@ -383,27 +429,25 @@ class Marktplaats:
 
     def logout(self):
         self.http.cookies.clear()
-        self._saved = None
+        self._authenticated = False
+        self._checked = (0, False)
         self._credentials = None
         self._pending = None
         self._persist()
 
     def logged_in(self):
-        if not self.has_cookies():
+        """Does the site accept the stored login right now? (Asked at most once a minute.)"""
+        if not self._authenticated:
             return False
-        try:
-            r = self.http.get(f"{BASE}/my-account/sell/api/listings",
-                              params={"batchNumber": 1, "batchSize": 1},
-                              headers={"Accept": "application/json"}, timeout=TIMEOUT)
-        except requests.RequestException:
-            return False
-        return r.status_code == 200
+        if time.time() - self._checked[0] > LOGIN_CHECK_TTL:
+            self._checked = (time.time(), self._accepted())
+        return self._checked[1]
 
     def _request(self, method, path, **kw):
-        if not self.has_cookies():
+        if not self._authenticated:
             if not self._relogin():
                 raise AuthError("Niet ingelogd: log eerst in bij Instellingen.")
-        url = path if path.startswith("http") else BASE + path
+        url = path if path.startswith("http") else self.base + path
         retried = kw.pop("_retried", False)
         timeout = kw.pop("timeout", TIMEOUT)
         waits = list(READ_RETRIES) if method == "GET" else []
@@ -413,14 +457,15 @@ class Marktplaats:
                 break
             except (requests.ConnectionError, requests.Timeout) as e:
                 if not waits:
-                    raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+                    raise MarktplaatsError(f"{self.site_name} is niet bereikbaar: {e}") from e
                 time.sleep(waits.pop(0))
             except requests.RequestException as e:
-                raise MarktplaatsError(f"Marktplaats is niet bereikbaar: {e}") from e
+                raise MarktplaatsError(f"{self.site_name} is niet bereikbaar: {e}") from e
         if r.status_code in (401, 403) or "/identity/" in r.url:
+            self._checked = (time.time(), False)
             if not retried and "files" not in kw and self._relogin():
                 return self._request(method, path, _retried=True, timeout=timeout, **kw)
-            raise AuthError("Marktplaats-sessie verlopen: log opnieuw in bij Instellingen.")
+            raise AuthError(f"De sessie bij {self.site_name} is verlopen: log opnieuw in bij Instellingen.")
         self._persist()
         return r
 
@@ -430,7 +475,7 @@ class Marktplaats:
             raise MarktplaatsError(f"{path} gaf status {r.status_code}")
         cfg = page_config(r.text)
         if cfg is None:
-            raise MarktplaatsError(f"{path}: geen paginagegevens gevonden (Marktplaats heeft de pagina veranderd?)")
+            raise MarktplaatsError(f"{path}: geen paginagegevens gevonden ({self.site_name} heeft de pagina veranderd?)")
         return cfg, r
 
     # ---- reading ---------------------------------------------------------
@@ -472,7 +517,8 @@ class Marktplaats:
             form.get("contacts", {}).get("contactInfo", {}).pop("countries", None)
         except MarktplaatsError:
             pass
-        return {"item_id": item_id, "listing": listing, "form": form}
+        return {"item_id": item_id, "listing": listing, "form": form,
+                "site": self.site, "url": f"{self.base}/seller/view/{item_id}"}
 
     def download_photo(self, url):
         """The original upload: the CDN serves it when the size rule is left off."""
@@ -513,7 +559,7 @@ class Marktplaats:
         name = os.path.basename(path)
         with open(path, "rb") as f:
             r = self._request("POST", "/plaats/api/image/upload",
-                              headers={"x-mp-xsrf": xsrf, "Origin": BASE, "Referer": referer,
+                              headers={"x-mp-xsrf": xsrf, "Origin": self.base, "Referer": referer,
                                        "Accept": "application/json"},
                               data={"name": name},
                               files={"imageData": (name, f, "image/jpeg")}, timeout=90)
@@ -521,14 +567,15 @@ class Marktplaats:
             raise MarktplaatsError(f"Foto {name} uploaden mislukt: {r.status_code} {r.text[:200]}")
         data = r.json()
         if not data.get("id") or data.get("valid") is False:
-            raise MarktplaatsError(f"Foto {name} geweigerd door Marktplaats: {r.text[:200]}")
+            raise MarktplaatsError(f"Foto {name} geweigerd door {self.site_name}: {r.text[:200]}")
         return data["id"], data.get("largeImageUrl") or data.get("imageUrl") or ""
 
     def build_fields(self, form, new, bucket, images, price=None, min_bid=None):
         """
         The form POST, field for field as the browser sends it. `form` is the
-        backed-up ad, `new` the empty form Marktplaats just gave us (tokens,
-        current contact details, current shipping prices).
+        ad (from a backup, or the edit form itself), `new` the form the site
+        just gave us: tokens, current contact details, current shipping prices.
+        For an edit the two are the same thing.
         """
         locale = (new.get("adDetails") or {}).get("locale") or "nl-NL"
         details = form.get("adDetails") or {}
@@ -562,7 +609,8 @@ class Marktplaats:
             floor = min_bid if min_bid is not None else p.get("minimumBidPrice")
             if bidding and floor:
                 fields.append(("price.minimumBidPrice", money(min(float(floor), float(amount)))))
-        fields += [("price.typeValue", ptype), ("previousPriceType", ""),
+        previous = (new.get("price") or {}).get("previousPriceType") if (new.get("form") or {}).get("isEditMode") else ""
+        fields += [("price.typeValue", ptype), ("previousPriceType", previous or ""),
                    ("price.biddingEnabled", "on" if bidding else "off")]
 
         s, ns = form.get("shipping") or {}, new.get("shipping") or {}
@@ -627,7 +675,7 @@ class Marktplaats:
         new = cfg.get("reactData") or {}
         ncat = new.get("category") or {}
         if ncat.get("errors"):
-            raise MarktplaatsError(f"Marktplaats weigert deze categorie: {ncat['errors']}")
+            raise MarktplaatsError(f"{self.site_name} weigert deze categorie: {ncat['errors']}")
         # Never spend money: only place where the free ad type is on offer.
         if ncat.get("isPaidAd") or ncat.get("isNewPaidAd"):
             raise MarktplaatsError("In deze categorie kost plaatsen geld; dat doet deze tool niet.")
@@ -637,7 +685,7 @@ class Marktplaats:
             raise MarktplaatsError("Er is geen gratis advertentievorm beschikbaar; niet geplaatst.")
         xsrf = (new.get("form") or {}).get("xsrfToken")
         if not xsrf:
-            raise MarktplaatsError("Geen formuliertoken gekregen van Marktplaats.")
+            raise MarktplaatsError(f"Geen formuliertoken gekregen van {self.site_name}.")
 
         if dry_run:
             images = [(f"<foto {os.path.basename(p)}>", "") for p in photo_paths]
@@ -646,21 +694,81 @@ class Marktplaats:
                     "fields": [(k, v) for k, v in self.build_fields(form, new, bucket, images, price, min_bid)
                                if k not in hidden and k != "images.urls"]}
 
+        before = {a.get("itemId") for a in self.listings()}       # to recognise the new ad if the answer gets lost
         images = [self._upload(p, xsrf, page.url) for p in photo_paths]
         fields = self.build_fields(form, new, bucket, images, price, min_bid)
         try:
             r = self._request("POST", "/plaats/ads", data=fields, timeout=90,
-                              headers={"Origin": BASE, "Referer": page.url,
+                              headers={"Origin": self.base, "Referer": page.url,
                                        "Accept": "text/html,application/xhtml+xml"})
         except MarktplaatsError as e:
-            # The form went out but no answer came back: it may or may not be online.
-            raise MarktplaatsError("Geen antwoord van Marktplaats op het plaatsen; het is onduidelijk of de nieuwe "
-                                   "advertentie online staat. De oude is niet verwijderd: kijk op Marktplaats en "
-                                   f"verwijder zo nodig een dubbele. ({e.args[0]})") from e
+            # The form went out but no answer came back. The ad list tells whether it arrived.
+            title = dict(fields).get(next(k for k, _ in fields if k.startswith("title_")), "")
+            found = self._find_placed(title, before)
+            if found:
+                return {"item_id": found, "url": f"{self.base}/seller/view/{found}", "confirmed_by": "list"}
+            raise MarktplaatsError(
+                f"Geen antwoord van {self.site_name} op het plaatsen, en de advertentie staat na een minuut niet in "
+                "je advertentielijst: hij is waarschijnlijk niet geplaatst. De oude is niet verwijderd. "
+                f"({e.args[0]})") from e
         m = re.search(r"/seller/view/(m\d+)", r.url)
         if m:
-            return {"item_id": m.group(1), "url": f"{BASE}/seller/view/{m.group(1)}"}
+            return {"item_id": m.group(1), "url": f"{self.base}/seller/view/{m.group(1)}"}
         raise MarktplaatsError("Niet geplaatst: " + self._form_errors(r), r.text)
+
+    def _find_placed(self, title, before):
+        """An ad with this title that was not in the list before: the one we just sent."""
+        for wait in PLACED_CHECKS:
+            time.sleep(wait)
+            try:
+                now = self.listings()
+            except (MarktplaatsError, AuthError):
+                continue
+            for ad in now:
+                if ad.get("itemId") not in before and (ad.get("title") or "").strip() == title.strip():
+                    return ad["itemId"]
+        return None
+
+    # ---- changing the price ----------------------------------------------
+
+    def update_price(self, item_id, price, min_bid=None, dry_run=False):
+        """
+        Save the ad with another price through its edit form, so it keeps its
+        views, favourites and place in the list. Everything else is sent back
+        exactly as the form holds it.
+        """
+        cfg, page = self._page(f"/plaats/{item_id}/edit")
+        form = cfg.get("reactData") or {}
+        tokens = form.get("form") or {}
+        if not tokens.get("isEditMode") or not tokens.get("xsrfToken"):
+            raise MarktplaatsError("Deze advertentie is niet (meer) te wijzigen.")
+        if (form.get("price") or {}).get("typeValue") not in ("FIXED", "MIN_BID"):
+            raise MarktplaatsError("Deze advertentie heeft geen vraagprijs; de prijs aanpassen kan alleen bij een vraagprijs.")
+        upload = (form.get("media") or {}).get("imageUpload") or {}
+        ids, urls = upload.get("initialImageIds") or [], upload.get("initialImageUrls") or []
+        if not ids or len(ids) != len(urls):
+            raise MarktplaatsError("De foto's van deze advertentie zijn niet te lezen; niets gewijzigd.")
+        images = [(i, re.sub(r"\$_#", "$_86", u)) for i, u in zip(ids, urls, strict=True)]
+        fields = self.build_fields(form, form, (form.get("category") or {}).get("bucketId") or "", images, price, min_bid)
+        if dry_run:
+            hidden = {"xsrf.token", "signature", "tmsid", "timestamp", "images.urls"}
+            return {"dry_run": True, "fields": [(k, v) for k, v in fields if k not in hidden]}
+
+        answer = None
+        try:
+            answer = self._request("POST", tokens.get("placeAdURL") or f"/plaats/{item_id}/edit", data=fields, timeout=90,
+                                   headers={"Origin": self.base, "Referer": page.url,
+                                            "Accept": "text/html,application/xhtml+xml"})
+        except MarktplaatsError:
+            pass                              # no answer: what the ad says now decides
+        if answer is not None and "/seller/view/" not in answer.url:
+            raise MarktplaatsError("Prijs niet aangepast: " + self._form_errors(answer))
+        listing = self._page(f"/seller/view/{item_id}")[0].get("listing") or {}
+        now = (listing.get("price") or {}).get("priceCent")
+        if now != round(float(price) * 100):
+            shown = "onbekend" if now is None else money(now / 100)
+            raise MarktplaatsError(f"Prijs niet aangepast: de advertentie staat op {self.site_name} voor € {shown}.")
+        return {"item_id": item_id}
 
     @staticmethod
     def _form_errors(r):
@@ -681,7 +789,7 @@ class Marktplaats:
         walk((page_config(r.text) or {}).get("reactData") or {})
         if found:
             return "; ".join(found[:6])
-        return f"onverwacht antwoord van Marktplaats (status {r.status_code}, {r.url})"
+        return f"onverwacht antwoord van de site (status {r.status_code}, {r.url})"
 
     # ---- deleting --------------------------------------------------------
 
@@ -692,8 +800,8 @@ class Marktplaats:
             raise MarktplaatsError("Geen token gevonden om te verwijderen.")
         r = self._request("DELETE", "/seller/api/delete-ad",
                           json={"itemId": item_id, "reason": "NO_DEAL_VIA_MP"},
-                          headers={"x-mp-xsrf": m.group(1), "Origin": BASE,
-                                   "Referer": f"{BASE}/seller/view/{item_id}", "Accept": "*/*"})
+                          headers={"x-mp-xsrf": m.group(1), "Origin": self.base,
+                                   "Referer": f"{self.base}/seller/view/{item_id}", "Accept": "*/*"})
         if r.status_code not in (200, 204):
             raise MarktplaatsError(f"Verwijderen mislukt: {r.status_code} {r.text[:200]}")
         return True

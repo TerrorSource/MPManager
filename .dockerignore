@@ -6,3 +6,8 @@ _oldversions
 .DS_Store
 **/__pycache__
 compose.local.yml
+tests
+screenshots
+ruff.toml
+requirements-dev.txt
+*.md

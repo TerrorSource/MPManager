@@ -9,11 +9,11 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 import store
-from watcher import db, notify, scheduler
+import notify
+from watcher import db, scheduler
 from watcher import marketplace as mp
 from watcher.config import RESULTS_PAGE_SIZE, MarketplaceError, logger
 from watcher.utils import (
-    clean_lines,
     clean_search_term,
     format_relative_time,
     int_or_none,
@@ -31,26 +31,6 @@ NOTIFICATION_KINDS = {
     "silent": "Stille run",
 }
 
-# The settings the page may change, with how to read them.
-SETTING_FIELDS = {
-    "marketplace": "choice:marktplaats,2dehands",
-    "default_interval_minutes": "int:1:1440",
-    "default_limit_per_run": "int:1:20",
-    "repost_dedup_days": "int:0:365",
-    "expiry_check_days": "int:0:90",
-    "skip_reserved": "bool",
-    "match_mode": "choice:text,title,off",
-    "sleep_mode": "bool",
-    "sleep_start": "time",
-    "sleep_end": "time",
-    "postcode": "postcode",
-    "radius_km": "choice:alle,3,5,10,15,25,50,75",
-    "manual_telegram": "bool",
-    "price_drop_alerts": "bool",
-    "telegram_digest_threshold": "int:0:100",
-}
-
-
 class _ToMPManagerLog(logging.Handler):
     """Wat de zoekopdrachten loggen komt in het log van MPManager."""
 
@@ -61,32 +41,23 @@ class _ToMPManagerLog(logging.Handler):
             pass
 
 
-def setup(get_telegram):
-    """Bij de start: database klaarzetten, MPWatcher overnemen, planner starten."""
+def setup():
+    """At the start: database ready, a stand-alone MPWatcher taken over, scheduler running."""
     if not any(isinstance(h, _ToMPManagerLog) for h in logger.handlers):
         logger.addHandler(_ToMPManagerLog(level=logging.INFO))
         logger.propagate = False
     imported = db.import_mpwatcher()
     db.init_db()
-    notify.telegram_target = lambda settings: get_telegram()
     scheduler.start_background_worker()
     return imported
 
 
-def mpwatcher_telegram():
-    """De Telegram-gegevens uit een overgenomen MPWatcher-database (voor eenmalige overname)."""
-    s = db.load_settings()
-    return (s.get("telegram_bot_id") or "").strip(), (s.get("telegram_chat_id") or "").strip()
+def legacy_settings():
+    return db.take_legacy_settings()
 
 
-def forget_mpwatcher_telegram():
-    """Na overname: het token niet ook nog leesbaar in de database laten staan."""
-    db.save_settings({"telegram_bot_id": "", "telegram_chat_id": ""})
-    conn = db.connect()
-    try:
-        conn.execute("VACUUM")      # also out of the freed pages of the database file
-    finally:
-        conn.close()
+def drop_blocked_titles(titles):
+    return db.delete_results_with_titles(titles)
 
 
 @bp.errorhandler(MarketplaceError)
@@ -127,14 +98,13 @@ def overview():
     keywords = db.load_keywords()
     counts = db.get_result_counts()
     now = datetime.now()
-    token, chats = notify.telegram_target(settings)
     return jsonify({
         "keywords": [_keyword_view(kw, settings, counts, now) for kw in keywords],
         "recent": [_ad_view(a) for a in db.get_recent_results(limit=10)],
         "scheduler": scheduler.get_scheduler_status(),
         "in_sleep": scheduler.in_sleep_now(settings, now),
         "error_count": sum(1 for kw in keywords if kw.get("last_error")),
-        "telegram_configured": bool(token and chats),
+        "telegram_configured": notify.configured(),
         "defaults": {"interval": settings["default_interval_minutes"], "limit": settings["default_limit_per_run"],
                      "marketplace": settings["marketplace"]},
     })
@@ -320,65 +290,3 @@ def notifications():
         it["created_display"] = format_relative_time(it.get("created_at"))
         it["kind_label"] = NOTIFICATION_KINDS.get(it.get("kind"), it.get("kind"))
     return jsonify({"items": items, "kinds": NOTIFICATION_KINDS})
-
-
-# ---- settings ------------------------------------------------------------
-
-@bp.get("/settings")
-def get_settings():
-    s = db.load_settings()
-    out = {k: s[k] for k in SETTING_FIELDS}
-    out["blocked_sellers"] = "\n".join(s.get("blocked_sellers") or [])
-    out["blocked_titles"] = "\n".join(s.get("blocked_titles") or [])
-    return jsonify(out)
-
-
-def _read_setting(kind, value):
-    if kind == "bool":
-        return bool(value)
-    if kind.startswith("int:"):
-        _, lo, hi = kind.split(":")
-        number = int_or_none(value)
-        if number is None:
-            raise ValueError
-        return max(int(lo), min(int(hi), number))
-    if kind.startswith("choice:"):
-        value = str(value).strip().lower()
-        if value not in kind[7:].split(","):
-            raise ValueError
-        return value
-    if kind == "time":
-        value = str(value).strip()
-        hh, mm = value.split(":")
-        if not (0 <= int(hh) < 24 and 0 <= int(mm) < 60):
-            raise ValueError
-        return f"{int(hh):02d}:{int(mm):02d}"
-    if kind == "postcode":
-        value = str(value or "").replace(" ", "").upper()
-        if value and not (len(value) in (4, 6) and value[:4].isdigit()):
-            raise ValueError
-        return value
-    return str(value)
-
-
-@bp.post("/settings")
-def save_settings():
-    data = _body()
-    updates, refused = {}, []
-    for key, kind in SETTING_FIELDS.items():
-        if key not in data:
-            continue
-        try:
-            updates[key] = _read_setting(kind, data[key])
-        except (ValueError, TypeError):
-            refused.append(key)
-    removed = 0
-    if "blocked_sellers" in data:
-        updates["blocked_sellers"] = clean_lines(data.get("blocked_sellers"))
-    if "blocked_titles" in data:
-        updates["blocked_titles"] = clean_lines(data.get("blocked_titles"))
-        removed = db.delete_results_with_titles(updates["blocked_titles"])
-    db.save_settings(updates)
-    if updates:
-        store.log("Instellingen zoekopdrachten opgeslagen.")
-    return jsonify({**get_settings().get_json(), "refused": refused, "removed": removed})

@@ -13,6 +13,7 @@
   [hidden] { display:none !important; }
   body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
   a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
+  a.b, a.b:hover { text-decoration:none; display:inline-block; line-height:normal; }
   header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 16px; background:var(--card); border-bottom:3px solid var(--accent); }
   header h1 { font-size:18px; margin:0 auto 0 0; }
   .pill { padding:3px 10px; border-radius:99px; font-size:13px; border:1px solid var(--line); }
@@ -22,25 +23,27 @@
   nav button.on { color:var(--ink); border-color:var(--accent); font-weight:600; }
   main { padding:16px; max-width:1100px; margin:0 auto; }
   .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
-  button.b { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
-  button.b.primary { background:var(--blue); color:#fff; border-color:transparent; }
+  button.b, a.b { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.b.primary, a.b.primary { background:var(--blue); color:#fff; border-color:transparent; }
   button.b.danger { color:var(--red); }
   button.b.on { border-color:var(--accent); background:var(--accent); color:#222; }
   button.b.small { padding:2px 8px; font-size:13px; }
   button.b:disabled { opacity:.5; cursor:default; }
-  .row { display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; }
   .row img { width:72px; height:72px; object-fit:cover; border-radius:6px; background:var(--line); flex:none; }
-  .row .info { flex:1; min-width:0; }
+  .row > input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; }
+  .row.picked { border-color:var(--blue); }
+  .row .info { flex:1 1 320px; min-width:0; }      /* too many buttons to fit beside it: they go on a line below */
   .row .info b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row .info small, .mute { color:var(--mute); }
-  .row .acts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .row .acts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; margin-left:auto; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
   .card h3 { margin-top:0; }
   .fields { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   input[type=text], input[type=email], input[type=password], input[type=number], input:not([type]), select {
     font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
   .fields input { min-width:210px; }
-  .grid { display:grid; grid-template-columns:minmax(0,1fr) 150px; gap:8px 12px; align-items:center; max-width:560px; }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 220px; gap:8px 12px; align-items:center; max-width:560px; }
   .grid input:not([type=checkbox]), .grid select { width:100%; }
   .grid input[type=checkbox] { justify-self:start; }
   textarea { width:100%; min-height:90px; font:13px ui-monospace, monospace; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
@@ -98,7 +101,16 @@
     <div class="bar">
       <button class="b" onclick="loadAds()">Vernieuwen</button>
       <button class="b primary" onclick="backupAll(this)">Alles backuppen</button>
+      <label><input type="checkbox" id="pickAll" onchange="pickAll(this.checked)"> Alles selecteren</label>
       <span id="adsInfo" class="mute"></span>
+    </div>
+    <div class="card bar" id="bulkBar" hidden style="padding:8px 12px">
+      <b id="bulkCount"></b>
+      <button class="b" onclick="bulk('backup', this)">Backup</button>
+      <button class="b primary" onclick="bulk('repost', this)">Herplaatsen</button>
+      <button class="b danger" onclick="bulk('delete', this)">Verwijderen</button>
+      <button class="b" onclick="pickAll(false)">Selectie wissen</button>
+      <span class="mute">Ze worden één voor één uitgevoerd, met wachttijd ertussen.</span>
     </div>
     <div id="adsList"></div>
   </section>
@@ -157,11 +169,12 @@
 
   <section id="settings" hidden>
     <div class="card">
-      <h3>Marktplaats-login</h3>
+      <h3>Login</h3>
       <p id="loginState"></p>
       <form id="loginForm" onsubmit="doLogin(event)">
-        <p>Log in met je Marktplaats-account. De sms-code wordt alleen doorgegeven aan Marktplaats en nooit bewaard.</p>
+        <p>Log in met je account van Marktplaats of 2dehands. De sms-code wordt alleen doorgegeven aan de site en nooit bewaard.</p>
         <div class="fields">
+          <select id="site" aria-label="Site" onchange="showSite()"><option value="marktplaats">Marktplaats.nl</option><option value="2dehands">2dehands.be</option></select>
           <input id="email" type="email" placeholder="E-mailadres" autocomplete="username" required>
           <input id="password" type="password" placeholder="Wachtwoord" autocomplete="current-password" required>
           <button class="b primary" id="loginBtn">Inloggen</button>
@@ -183,7 +196,7 @@
       </div>
       <details style="margin-top:8px">
         <summary>Lukt inloggen niet? Cookies uit je browser plakken</summary>
-        <p>Log in op marktplaats.nl, open de ontwikkelaarstools (F12) → <i>Application</i> → <i>Cookies</i> → <i>https://www.marktplaats.nl</i>
+        <p>Log in op <span class="siteHost">marktplaats.nl</span> (de site die je hierboven kiest), open de ontwikkelaarstools (F12) → <i>Application</i> → <i>Cookies</i> → <i>https://www.<span class="siteHost">marktplaats.nl</span></i>
           en kopieer <code>MpSecurity</code> en <code>MpSslSecurity</code>. Plak ze hieronder als <code>naam=waarde</code>, één per regel.</p>
         <textarea id="cookies" placeholder="MpSecurity=…&#10;MpSslSecurity=…" autocomplete="off" spellcheck="false"></textarea>
         <div class="bar" style="margin-top:8px">
@@ -208,7 +221,7 @@
       </div>
 
       <h3 style="margin-top:20px">Automatisch herplaatsen</h3>
-      <p class="mute">Slaat advertenties over die zijn uitgesloten, gereserveerd zijn of een bod hebben. Begin klein: veel herplaatsen kan Marktplaats als misbruik zien.</p>
+      <p class="mute">Slaat advertenties over die zijn uitgesloten, gereserveerd zijn of een bod hebben. Begin klein: veel herplaatsen kan de site als misbruik zien.</p>
       <div class="grid">
         <label for="s_auto_repost">Automatisch herplaatsen aan</label><input type="checkbox" id="s_auto_repost">
         <label for="s_min_age_days">Alleen advertenties die minstens zo lang online staan (dagen)</label><input type="number" min="0" id="s_min_age_days">
@@ -292,7 +305,7 @@
 </dialog>
 <dialog id="adjustDlg">
   <form onsubmit="submitAdjust(event)">
-    <h3>Herplaatsen + aanpassen</h3>
+    <h3 id="adjHead">Herplaatsen + aanpassen</h3>
     <p id="adjTitle" class="mute" style="margin:0"></p>
     <div class="bar" style="margin:14px 0 0">
       <span class="mute">Prijs verlagen:</span>
@@ -306,7 +319,7 @@
       <label for="adjMin" id="adjMinLabel">Bieden vanaf (€), leeg = zoals nu, maar nooit boven de prijs</label>
       <input id="adjMin" inputmode="decimal" autocomplete="off">
     </div>
-    <p class="mute" style="margin:0 0 14px">De oude advertentie wordt verwijderd zodra de nieuwe online staat. Biedingen, bewaarders en weergaven vervallen.</p>
+    <p class="mute" id="adjNote" style="margin:0 0 14px"></p>
     <div class="bar" style="justify-content:flex-end; margin:0">
       <button class="b" type="button" onclick="$('adjustDlg').close()">Annuleren</button>
       <button class="b primary" id="adjBtn">Herplaatsen</button>
@@ -321,7 +334,9 @@ const when = ts => ts ? new Date(ts * 1000).toLocaleString('nl-NL', {dateStyle:'
 const euro = c => '€ ' + (c / 100).toLocaleString('nl-NL', {minimumFractionDigits:2});
 const SETTING_IDS = ['dry_run','auto_backup','auto_repost','min_age_days','max_per_day','active_hours','auto_delay_min',
                      'auto_delay_max','manual_delay_min','manual_delay_max','backup_retention_days','telegram_chat_id','notify_on'];
-let dryRun = true, ads = [];
+let dryRun = true, ads = [], siteName = 'Marktplaats', picked = new Set();
+const HOSTS = {marktplaats: 'marktplaats.nl', '2dehands': '2dehands.be'};
+function showSite() { document.querySelectorAll('.siteHost').forEach(el => el.textContent = HOSTS[$('site').value]); }
 
 function toast(msg, err) {
   const t = $('toast'); t.textContent = msg; t.className = err ? 'err' : ''; t.style.display = 'block';
@@ -352,9 +367,11 @@ async function status() {
   dryRun = s.dry_run; $('pDry').hidden = !dryRun;
   $('pAuto').hidden = !s.auto_repost;
   $('pAuto').textContent = `Automatisch herplaatsen: ${s.reposts_today} van ${s.max_per_day} vandaag`;
-  $('pLogin').textContent = s.logged_in ? 'Ingelogd op Marktplaats' : 'Niet ingelogd';
+  siteName = s.site_name;
+  if (!$('site').dataset.set) { $('site').value = s.site; $('site').dataset.set = 1; showSite(); }
+  $('pLogin').textContent = s.logged_in ? 'Ingelogd op ' + s.site_name : 'Niet ingelogd';
   $('pLogin').className = 'pill ' + (s.logged_in ? 'ok' : 'bad');
-  $('loginState').textContent = (s.state_error ? s.state_error + ' ' : '') + (s.logged_in ? 'Je bent ingelogd.' : 'Je bent niet ingelogd.')
+  $('loginState').textContent = (s.state_error ? s.state_error + ' ' : '') + (s.logged_in ? `Je bent ingelogd op ${s.site_name}.` : 'Je bent niet ingelogd.')
     + (s.saved_email ? ' Het wachtwoord van ' + s.saved_email + ' is versleuteld bewaard.' : ' Er is geen wachtwoord bewaard.');
   $('forgetBtn').hidden = !s.saved_email;
   return s;
@@ -395,8 +412,10 @@ async function loadAds() {
   try {
     ads = (await api('/api/ads')).ads;
     $('adsInfo').textContent = ads.length + ' advertenties';
+    picked = new Set(ads.map(a => a.item_id).filter(id => picked.has(id)));
     $('adsList').innerHTML = ads.map((a, i) => `
-      <div class="row">
+      <div class="row${picked.has(a.item_id) ? ' picked' : ''}">
+        <input type="checkbox" aria-label="Selecteer ${esc(a.title)}" ${picked.has(a.item_id) ? 'checked' : ''} onchange="pick(${i}, this)">
         <img src="${esc(a.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">
         <div class="info">
           <b><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a></b>
@@ -406,13 +425,42 @@ async function loadAds() {
         <div class="acts">
           <button class="b" onclick="backup(${i}, this)">Backup</button>
           <button class="b primary" title="Precies hetzelfde opnieuw plaatsen" onclick="repost(${i}, this)">Herplaatsen</button>
-          <button class="b" title="Opnieuw plaatsen met een andere prijs" ${canAdjust(a) ? '' : 'disabled'} onclick="openAdjust(${i})">Herplaatsen + aanpassen</button>
+          <button class="b" title="Opnieuw plaatsen met een andere prijs" ${canAdjust(a) ? '' : 'disabled'} onclick="openAdjust(${i}, 'repost')">Herplaatsen + aanpassen</button>
+          <button class="b" title="De prijs van deze advertentie wijzigen, zonder opnieuw te plaatsen" ${canAdjust(a) ? '' : 'disabled'} onclick="openAdjust(${i}, 'price')">Prijs aanpassen</button>
           <button class="b ${a.excluded ? 'on' : ''}" title="Automatisch herplaatsen slaat uitgesloten advertenties over" onclick="exclude(${i}, this)">${a.excluded ? 'Uitgesloten' : 'Uitsluiten'}</button>
           <button class="b danger" onclick="removeAd(${i}, this)">Verwijderen</button>
         </div>
       </div>`).join('') || '<p>Geen advertenties gevonden.</p>';
+    showPicked();
   } catch (e) { $('adsInfo').textContent = ''; $('adsList').innerHTML = `<p>${esc(e.message)}</p>`; }
 }
+
+// ---- meerdere tegelijk ----
+function showPicked() {
+  $('bulkBar').hidden = !picked.size;
+  $('bulkCount').textContent = picked.size + ' geselecteerd';
+  $('pickAll').checked = ads.length > 0 && picked.size === ads.length;
+}
+function pick(i, box) {
+  box.checked ? picked.add(ads[i].item_id) : picked.delete(ads[i].item_id);
+  box.closest('.row').classList.toggle('picked', box.checked); showPicked();
+}
+function pickAll(on) {
+  picked = new Set(on ? ads.map(a => a.item_id) : []);
+  document.querySelectorAll('#adsList .row').forEach(row => {
+    row.classList.toggle('picked', on); row.querySelector('input[type=checkbox]').checked = on;
+  });
+  showPicked();
+}
+const bulk = (action, btn) => busy(btn, async () => {
+  const chosen = ads.filter(a => picked.has(a.item_id)), n = chosen.length;
+  const ask = {repost: `${n} advertenties worden opnieuw geplaatst en de oude daarna verwijderd. Biedingen, bewaarders en weergaven vervallen. Doorgaan?`,
+               delete: `${n} advertenties van ${siteName} verwijderen?`}[action];
+  if (ask && !dryRun && !confirm(ask)) return;
+  const r = await queue('/api/ads/bulk', {action, ads: chosen.map(a => ({item_id: a.item_id, title: a.title}))});
+  toast(`${r.queued} in de wachtrij gezet` + (dryRun && action !== 'backup' ? ' (proefmodus: alleen voorbereid)' : ''));
+  pickAll(false);
+});
 const backup = (i, btn) => busy(btn, () => queue(`/api/ads/${ads[i].item_id}/backup`, {title: ads[i].title}));
 const backupAll = btn => busy(btn, async () => { const r = await queue('/api/backup-all'); toast(`${r.queued} backups in de wachtrij`); });
 const repost = (i, btn) => busy(btn, async () => {
@@ -424,15 +472,20 @@ const repost = (i, btn) => busy(btn, async () => {
 const canAdjust = a => ['FIXED', 'MIN_BID'].includes(a.price_type) && a.price_cents != null;
 const typed = v => String(v).replace(/[€\s]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
 const shown = n => n.toLocaleString('nl-NL', {minimumFractionDigits:2, maximumFractionDigits:2, useGrouping:false});
-let adjusting = null;
-function openAdjust(i) {
-  const a = ads[i]; adjusting = i;
+let adjusting = null, adjustMode = 'repost';
+function openAdjust(i, mode) {
+  const a = ads[i]; adjusting = i; adjustMode = mode;
+  const price = mode === 'price';
+  $('adjHead').textContent = price ? 'Prijs aanpassen' : 'Herplaatsen + aanpassen';
+  $('adjNote').textContent = price
+    ? 'De advertentie blijft staan, met zijn weergaven en bewaarders; alleen de prijs verandert. Staan er biedingen op, dan kan de site die laten vervallen.'
+    : 'De oude advertentie wordt verwijderd zodra de nieuwe online staat. Biedingen, bewaarders en weergaven vervallen.';
   $('adjTitle').textContent = a.title;
   $('adjNow').textContent = '(nu ' + euro(a.price_cents) + ')';
   $('adjPrice').value = shown(a.price_cents / 100);
   $('adjMin').value = ''; $('adjMin').placeholder = a.min_bid_cents ? shown(a.min_bid_cents / 100) : '';
   $('adjMin').hidden = $('adjMinLabel').hidden = !a.bidding;
-  $('adjBtn').textContent = dryRun ? 'Proef herplaatsen' : 'Herplaatsen';
+  $('adjBtn').textContent = (dryRun ? 'Proef: ' : '') + (price ? 'Prijs aanpassen' : 'Herplaatsen');
   $('adjustDlg').showModal(); $('adjPrice').select();
 }
 function discount(pct) {
@@ -444,13 +497,13 @@ const submitAdjust = ev => { ev.preventDefault(); busy($('adjBtn'), async () => 
   const min = $('adjMin').value.trim() ? parseFloat(typed($('adjMin').value)) : null;
   if (!(price > 0)) throw new Error('Vul een geldige prijs in.');
   if (min !== null && !(min > 0 && min <= price)) throw new Error('Bieden vanaf moet tussen 0 en de prijs liggen.');
-  await queue(`/api/ads/${a.item_id}/repost-adjust`, {title: a.title, price, min_bid: min});
+  await queue(`/api/ads/${a.item_id}/${adjustMode === 'price' ? 'price' : 'repost-adjust'}`, {title: a.title, price, min_bid: min});
   $('adjustDlg').close();
   toast(dryRun ? 'Proefmodus: wordt alleen voorbereid (zie Log)' : 'In de wachtrij gezet; annuleren kan nog even');
 }); };
 
 const removeAd = (i, btn) => busy(btn, async () => {
-  if (!dryRun && !confirm(`"${ads[i].title}" van Marktplaats verwijderen?`)) return;
+  if (!dryRun && !confirm(`"${ads[i].title}" van ${siteName} verwijderen?`)) return;
   await queue(`/api/ads/${ads[i].item_id}/delete`, {title: ads[i].title});
 });
 const exclude = (i, btn) => busy(btn, async () => {
@@ -476,11 +529,11 @@ async function loadBackups() {
     </div>`).join('') || '<p>Nog geen backups.</p>';
 }
 const placeBackup = (id, btn) => busy(btn, async () => {
-  if (!dryRun && !confirm('Deze backup als nieuwe advertentie op Marktplaats plaatsen?')) return;
+  if (!dryRun && !confirm(`Deze backup als nieuwe advertentie op ${siteName} plaatsen?`)) return;
   await queue(`/api/backups/${id}/place`);
 });
 const dropBackup = (id, btn) => busy(btn, async () => {
-  if (!confirm('Deze backup van schijf wissen? Op Marktplaats verandert niets.')) return;
+  if (!confirm('Deze backup van schijf wissen? Op de site verandert niets.')) return;
   await api(`/api/backups/${id}`, 'DELETE'); loadBackups();
 });
 async function loadHistory() {
@@ -492,31 +545,40 @@ async function loadHistory() {
 async function loadLog() { $('logBox').textContent = (await api('/api/log')).lines.join('\n') || 'Leeg.'; }
 
 // ---- instellingen ----
+// Alle instellingen staan in één bestand en gaan via één adres; elke kaart stuurt zijn eigen velden.
+const W_IDS = ['marketplace','default_interval_minutes','default_limit_per_run','match_mode','repost_dedup_days','expiry_check_days','skip_reserved',
+               'postcode','radius_km','sleep_mode','sleep_start','sleep_end','price_drop_alerts','telegram_digest_threshold','manual_telegram',
+               'blocked_sellers','blocked_titles'];
+const fields = (ids, prefix) => Object.fromEntries(ids.map(k => { const el = $(prefix + k); return [k, el.type === 'checkbox' ? el.checked : el.value]; }));
 async function loadSettings() {
   await status();
   const s = await api('/api/settings');
-  for (const k of SETTING_IDS) { const el = $('s_' + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = s[k]; }
+  for (const [ids, prefix] of [[SETTING_IDS, 's_'], [W_IDS, 'w_']])
+    for (const k of ids) { const el = $(prefix + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = Array.isArray(s[k]) ? s[k].join('\n') : s[k]; }
   $('tokenState').textContent = s.telegram_token_set ? '(versleuteld bewaard)' : '(nog niet ingesteld)';
 }
-const saveSettings = ev => { ev.preventDefault(); busy(ev.submitter, async () => {
-  const data = {};
-  for (const k of SETTING_IDS) { const el = $('s_' + k); data[k] = el.type === 'checkbox' ? el.checked : el.value; }
-  if ($('s_telegram_bot_token').value) data.telegram_bot_token = $('s_telegram_bot_token').value;
-  if (data.auto_repost && !data.dry_run && !confirm('Automatisch herplaatsen staat aan en proefmodus uit: de tool gaat zelf advertenties vervangen. Doorgaan?')) return;
+async function postSettings(data) {
   const r = await api('/api/settings', 'POST', data);
-  $('s_telegram_bot_token').value = '';
   toast(r.refused.length ? 'Opgeslagen, behalve ongeldige waarde bij: ' + r.refused.join(', ') : 'Instellingen opgeslagen', r.refused.length > 0);
   loadSettings();
+}
+const saveSettings = ev => { ev.preventDefault(); busy(ev.submitter, async () => {
+  const data = fields(SETTING_IDS, 's_');
+  if ($('s_telegram_bot_token').value) data.telegram_bot_token = $('s_telegram_bot_token').value;
+  if (data.auto_repost && !data.dry_run && !confirm('Automatisch herplaatsen staat aan en proefmodus uit: de tool gaat zelf advertenties vervangen. Doorgaan?')) return;
+  await postSettings(data);
+  $('s_telegram_bot_token').value = '';
 }); };
+const saveWatchSettings = ev => { ev.preventDefault(); busy(ev.submitter, () => postSettings(fields(W_IDS, 'w_'))); };
 const testTelegram = btn => busy(btn, async () => { await api('/api/notify/test', 'POST'); toast('Testbericht verstuurd'); });
 
 function showLogin() { $('codeForm').hidden = true; $('loginForm').hidden = false; $('code').value = ''; }
-function loggedIn() { $('password').value = ''; showLogin(); toast('Ingelogd op Marktplaats'); status(); }
+function loggedIn() { $('password').value = ''; showLogin(); toast('Ingelogd'); status(); }
 const doLogin = ev => { ev.preventDefault(); busy($('loginBtn'), async () => {
-  const r = await api('/api/login', 'POST', {email: $('email').value, password: $('password').value, remember: $('remember').checked});
+  const r = await api('/api/login', 'POST', {site: $('site').value, email: $('email').value, password: $('password').value, remember: $('remember').checked});
   if (r.logged_in) return loggedIn();
   $('password').value = '';
-  $('codeText').textContent = 'Marktplaats heeft een sms-code gestuurd' + (r.phone ? ' naar ' + r.phone : '') + '. Vul die hier in.';
+  $('codeText').textContent = 'Er is een sms-code gestuurd' + (r.phone ? ' naar ' + r.phone : '') + '. Vul die hier in.';
   $('loginForm').hidden = true; $('codeForm').hidden = false; $('code').focus();
 }); };
 const doCode = ev => { ev.preventDefault(); busy($('codeBtn'), async () => {
@@ -524,12 +586,12 @@ const doCode = ev => { ev.preventDefault(); busy($('codeBtn'), async () => {
 }); };
 const resendCode = btn => busy(btn, async () => { await api('/api/login/resend', 'POST'); toast('Nieuwe code gestuurd'); });
 const saveCookies = btn => busy(btn, async () => {
-  await api('/api/session', 'POST', {cookies: $('cookies').value});
+  await api('/api/session', 'POST', {site: $('site').value, cookies: $('cookies').value});
   $('cookies').value = ''; toast('Login werkt'); status();
 });
 const forgetPassword = () => busy(null, async () => { await api('/api/login/password', 'DELETE'); status(); });
 const logout = () => busy(null, async () => {
-  if (!confirm('De opgeslagen Marktplaats-login (sessie en bewaard wachtwoord) wissen?')) return;
+  if (!confirm('De opgeslagen login (sessie en bewaard wachtwoord) wissen?')) return;
   await api('/api/session', 'DELETE'); status();
 });
 
@@ -581,7 +643,7 @@ async function loadWatch() {
           <button class="b" onclick="manualSearch(${k.id}, this)">Nu zoeken</button>
           <button class="b" onclick="openCategories(${i})">Categorie</button>
           <button class="b" onclick="toggleEdit(${k.id})">${kwOpen.has(k.id) ? 'Sluiten' : 'Bewerken'}</button>
-          <a class="b" style="text-decoration:none" href="${esc(k.mp_url)}" target="_blank" rel="noopener">Op de site</a>
+          <a class="b" href="${esc(k.mp_url)}" target="_blank" rel="noopener">Op de site</a>
         </div>
       </div>
       ${kwOpen.has(k.id) ? `<div class="kwedit">
@@ -686,32 +748,20 @@ async function loadNotifications() {
   </div></div>`).join('') || '<p>Nog geen meldingen.</p>';
 }
 
-const W_IDS = ['marketplace','default_interval_minutes','default_limit_per_run','match_mode','repost_dedup_days','expiry_check_days','skip_reserved',
-               'postcode','radius_km','sleep_mode','sleep_start','sleep_end','price_drop_alerts','telegram_digest_threshold','manual_telegram',
-               'blocked_sellers','blocked_titles'];
-async function loadWatchSettings() {
-  const s = await api('/api/watch/settings');
-  for (const k of W_IDS) { const el = $('w_' + k); if (el.type === 'checkbox') el.checked = s[k]; else el.value = s[k]; }
-}
-const saveWatchSettings = ev => { ev.preventDefault(); busy($('wSaveBtn'), async () => {
-  const data = {};
-  for (const k of W_IDS) { const el = $('w_' + k); data[k] = el.type === 'checkbox' ? el.checked : el.value; }
-  const r = await api('/api/watch/settings', 'POST', data);
-  toast(r.refused.length ? 'Opgeslagen, behalve ongeldige waarde bij: ' + r.refused.join(', ') : 'Opgeslagen' + (r.removed ? `; ${r.removed} resultaten verwijderd` : ''), r.refused.length > 0);
-  loadWatchSettings();
-}); };
-
 let currentTab = 'ads';
 const loaders = {ads: loadAds, backups: loadBackups, watch: () => { watchView('overview'); }, history: loadHistory, log: loadLog,
-                 settings: async () => { await loadSettings(); await loadWatchSettings(); }};
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  currentTab = b.dataset.tab;
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+                 settings: loadSettings};
+function openTab(tab) {
+  currentTab = loaders[tab] ? tab : 'ads';
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === currentTab));
   document.querySelectorAll('main section').forEach(s => s.hidden = s.id !== currentTab);
+  if (location.hash.slice(1) !== currentTab) history.replaceState(null, '', '#' + currentTab);
   showJobsCard();
   busy(null, loaders[currentTab]);
-});
-status().then(s => s.logged_in ? loadAds() : document.querySelector('[data-tab=settings]').click()).catch(e => toast(e.message, true));
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => openTab(b.dataset.tab));
+window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== currentTab) openTab(location.hash.slice(1)); });
+status().then(s => openTab(location.hash.slice(1) || (s.logged_in ? 'ads' : 'settings'))).catch(e => toast(e.message, true));
 loadJobs();
 </script>
 </body>

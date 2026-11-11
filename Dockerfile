@@ -1,8 +1,15 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
+
+# Security updates of the base image (the build is refused on a CRITICAL finding)
+RUN apt-get update \
+    && apt-get -y --no-install-recommends upgrade \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip and setuptools first: the versions that ship with the image have known vulnerabilities
+RUN pip install --no-cache-dir --upgrade pip setuptools \
+    && pip install --no-cache-dir -r requirements.txt
 COPY app/ .
 # readable for whatever PUID the container is told to run as
 RUN chmod -R a+rX /app

@@ -5,17 +5,19 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
+import store
+
 from .config import (
     CONFIG_DIR,
     DB_FILE,
-    DEFAULT_SETTINGS,
     MAX_RESULTS_PER_KEYWORD,
     MPWATCHER_DB_FILE,
     NOTIFICATIONS_KEEP,
+    SETTING_KEYS,
     logger,
 )
 from .marketplace import parse_posted_at_to_dt, parse_price_to_cents
-from .utils import int_or_none, normalize_terms, normalize_title
+from .utils import normalize_terms, normalize_title
 
 
 def connect() -> sqlite3.Connection:
@@ -211,69 +213,39 @@ def config_writable() -> bool:
 # ------------------------------------------------------------------------------
 
 def load_settings() -> dict:
-    conn = connect()
-    try:
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    finally:
-        conn.close()
-
-    merged = {
-        k: (v.copy() if isinstance(v, (list, dict)) else v)
-        for k, v in DEFAULT_SETTINGS.items()
-    }
-    for row in rows:
-        if row["key"] not in DEFAULT_SETTINGS:
-            continue
-        try:
-            merged[row["key"]] = json.loads(row["value"])
-        except Exception:
-            logger.warning("Instelling '%s' kon niet gelezen worden, default gebruikt", row["key"])
-
-    merged["default_interval_minutes"] = int_or_none(merged.get("default_interval_minutes")) or 15
-    merged["default_limit_per_run"] = int_or_none(merged.get("default_limit_per_run")) or 5
-
-    mp = str(merged.get("marketplace") or "marktplaats").strip().lower()
-    merged["marketplace"] = "2dehands" if mp in ("2dehands", "2dehands.be", "2dehandsbe") else "marktplaats"
-
-    for key in ("sleep_mode", "manual_telegram", "price_drop_alerts", "skip_reserved"):
-        merged[key] = bool(merged.get(key))
-
-    digest = int_or_none(merged.get("telegram_digest_threshold"))
-    merged["telegram_digest_threshold"] = max(0, digest) if digest is not None else 5
-
-    repost = int_or_none(merged.get("repost_dedup_days"))
-    merged["repost_dedup_days"] = max(0, repost) if repost is not None else 30
-
-    expiry = int_or_none(merged.get("expiry_check_days"))
-    merged["expiry_check_days"] = max(0, min(90, expiry)) if expiry is not None else 7
-
-    mode = str(merged.get("match_mode") or "text").strip().lower()
-    merged["match_mode"] = mode if mode in ("text", "title", "off") else "text"
-
-    for key in ("blocked_sellers", "blocked_titles"):
-        if not isinstance(merged.get(key), list):
-            merged[key] = []
-
-    return merged
+    """De instellingen van de zoekopdrachten, uit het ene instellingenbestand."""
+    current = store.settings()
+    return {key: current[key] for key in SETTING_KEYS}
 
 
 def save_settings(values: dict) -> None:
-    """Sla (alleen) de meegegeven instellingen op; per key een upsert,
-    zodat gelijktijdige schrijvers elkaars keys niet overschrijven."""
-    if not values:
-        return
+    store.save_settings({k: v for k, v in values.items() if k in SETTING_KEYS})
+
+
+def take_legacy_settings() -> dict:
+    """
+    Vroeger (en in MPWatcher zelf) stonden de instellingen in de database.
+    Geef ze eenmalig terug en maak de tabel leeg; daarna gelden alleen nog de
+    instellingen van MPManager. Ook het Telegram-token verdwijnt zo uit de
+    database (VACUUM: ook uit de vrijgekomen pagina's van het bestand).
+    """
     conn = connect()
     try:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        if not rows:
+            return {}
         with conn:
-            conn.executemany(
-                """
-                INSERT INTO settings (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                [(k, json.dumps(v)) for k, v in values.items()],
-            )
+            conn.execute("DELETE FROM settings")
+        conn.execute("VACUUM")
     finally:
         conn.close()
+    out = {}
+    for row in rows:
+        try:
+            out[row["key"]] = json.loads(row["value"])
+        except ValueError:
+            pass
+    return out
 
 
 # ------------------------------------------------------------------------------

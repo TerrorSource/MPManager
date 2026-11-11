@@ -145,39 +145,6 @@ def body():
     return request.get_json(silent=True) or {}
 
 
-# ---- startup migrations ------------------------------------------------------
-
-def import_old_session():
-    """Take over the login of the previous (Playwright) version, once."""
-    old = os.path.join(store.CONFIG_DIR, "cookies.json")
-    if client.has_cookies() or client.saved_email() or not os.path.exists(old):
-        return
-    try:
-        with open(old) as f:
-            client.set_cookies(mp_api.parse_cookies(f.read()))
-        log("Login overgenomen uit cookies.json van de vorige versie.")
-    except (AuthError, OSError, ValueError) as e:
-        log(f"cookies.json van de vorige versie is niet meer bruikbaar: {e}")
-
-
-def encrypt_old_password():
-    """The previous version kept the password readable in settings.json; move it into the encrypted state."""
-    path = os.path.join(store.CONFIG_DIR, "settings.json")
-    try:
-        with open(path) as f:
-            old = json.load(f)
-    except (OSError, ValueError):
-        return
-    if not isinstance(old, dict) or not old.get("password"):
-        return
-    if old.get("email") and not client.saved_email():
-        client.remember(old["email"], old["password"])
-    old.pop("password")
-    with open(path, "w") as f:
-        json.dump(old, f, indent=2)
-    log("Leesbaar wachtwoord uit settings.json van de vorige versie verwijderd; het staat nu versleuteld in state.json.")
-
-
 # ---- page and status ---------------------------------------------------------
 
 @app.get("/")
@@ -188,7 +155,9 @@ def index():
 @app.get("/api/status")
 def api_status():
     s = store.settings()
-    return jsonify({"logged_in": client.logged_in(), "dry_run": s["dry_run"], "auto_repost": s["auto_repost"],
+    return jsonify({"logged_in": client.logged_in(), "site": client.site, "site_name": client.site_name,
+                    "sites": {key: site["name"] for key, site in mp_api.SITES.items()},
+                    "dry_run": s["dry_run"], "auto_repost": s["auto_repost"],
                     "reposts_today": store.reposts_today(), "max_per_day": s["max_per_day"],
                     "backups": len(store.list_backups()), "saved_email": client.saved_email(),
                     "state_error": client.state_error})
@@ -210,7 +179,10 @@ def api_settings():
         client.set_secret("telegram_bot_token", "")
     changed = [k for k in s if s[k] != before[k] and k != "exclude"]
     if changed:
-        log("Instellingen gewijzigd: " + ", ".join(f"{k}={s[k]}" for k in changed))
+        log("Instellingen gewijzigd: " + ", ".join(
+            f"{k}={s[k]}" if not isinstance(s[k], list) else f"{k} ({len(s[k])})" for k in changed))
+    if "blocked_titles" in changed:       # what is ignored from now on should not stay in the results either
+        watch_api.drop_blocked_titles(s["blocked_titles"])
     return jsonify({**s, "refused": refused, "telegram_token_set": bool(notify.get_token())})
 
 
@@ -230,15 +202,19 @@ def api_login():
     email, password = (data.get("email") or "").strip(), data.get("password") or ""
     if not email or not password:
         raise AuthError("Vul e-mailadres en wachtwoord in.")
-    result = client.login(email, password, remember=bool(data.get("remember")))
-    log("Ingelogd op Marktplaats." if result.get("logged_in") else "Wachtwoord geaccepteerd; wacht op de sms-code.")
+    site = data.get("site") or client.site
+    if site not in mp_api.SITES:
+        raise AuthError("Onbekende site.")
+    result = client.login(email, password, remember=bool(data.get("remember")), site=site)
+    log(f"Ingelogd op {client.site_name}." if result.get("logged_in")
+        else f"Wachtwoord geaccepteerd door {mp_api.SITES[site]['name']}; wacht op de sms-code.")
     return jsonify(result)
 
 
 @app.post("/api/login/code")
 def api_login_code():
     result = client.login_code(body().get("code") or "")
-    log("Ingelogd op Marktplaats met sms-code.")
+    log(f"Ingelogd op {client.site_name} met sms-code.")
     return jsonify(result)
 
 
@@ -256,15 +232,16 @@ def api_forget_password():
 
 @app.post("/api/session")
 def api_session():
-    client.set_cookies(mp_api.parse_cookies(body().get("cookies", "")))
-    log("Nieuwe Marktplaats-cookies opgeslagen.")
+    site = body().get("site") or client.site
+    client.set_cookies(mp_api.parse_cookies(body().get("cookies", "")), site)
+    log(f"Nieuwe cookies van {client.site_name} opgeslagen.")
     return jsonify({"ok": True})
 
 
 @app.delete("/api/session")
 def api_logout():
     client.logout()
-    log("Marktplaats-login gewist.")
+    log("Login gewist.")
     return jsonify({"ok": True})
 
 
@@ -291,7 +268,7 @@ def api_ads():
             "views": raw.get("viewCount"),
             "expires": (raw.get("closeDate") or "")[:10],
             "image": ("https:" + image if image.startswith("//") else image).replace("$_#", "$_82"),
-            "url": mp_api.BASE + (raw.get("sVipUrl") or f"/seller/view/{item_id}"),
+            "url": client.base + (raw.get("sVipUrl") or f"/seller/view/{item_id}"),
             "backed_up_at": meta and meta["backed_up_at"],
             "age_days": None if age is None else int(age),
             "excluded": item_id in s["exclude"],
@@ -312,8 +289,7 @@ def api_backup(item_id):
 @app.post("/api/backup-all")
 def api_backup_all():
     listings = client.listings()
-    for raw in listings:
-        worker.enqueue("backup", raw["itemId"], raw.get("title"))
+    worker.enqueue_many("backup", [(raw["itemId"], raw.get("title")) for raw in listings])
     return jsonify({"queued": len(listings)})
 
 
@@ -332,7 +308,7 @@ def amount(value, what):
     try:
         number = round(float(text), 2)
     except ValueError:
-        raise MarktplaatsError(f"Ongeldige {what}: {value}")
+        raise MarktplaatsError(f"Ongeldige {what}: {value}") from None
     if not 0 < number < 1_000_000:
         raise MarktplaatsError(f"Ongeldige {what}: {value}")
     return number
@@ -348,6 +324,30 @@ def api_repost_adjust(item_id):
     if min_bid is not None and min_bid > price:
         raise MarktplaatsError("Het minimumbod mag niet hoger zijn dan de prijs.")
     return jsonify(worker.enqueue("repost_adjust", item(item_id), data.get("title"), price=price, min_bid=min_bid))
+
+
+@app.post("/api/ads/<item_id>/price")
+def api_price(item_id):
+    """Another price on the ad itself, without reposting it."""
+    data = body()
+    price = amount(data.get("price"), "prijs")
+    if price is None:
+        raise MarktplaatsError("Vul een nieuwe prijs in.")
+    min_bid = amount(data.get("min_bid"), "minimumbod")
+    if min_bid is not None and min_bid > price:
+        raise MarktplaatsError("Het minimumbod mag niet hoger zijn dan de prijs.")
+    return jsonify(worker.enqueue("price", item(item_id), data.get("title"), price=price, min_bid=min_bid))
+
+
+@app.post("/api/ads/bulk")
+def api_bulk():
+    """The same action for several ads; they are queued one after the other."""
+    data = body()
+    kind = {"backup": "backup", "repost": "repost", "delete": "delete"}.get(data.get("action"))
+    ads = [(item(a.get("item_id")), a.get("title")) for a in data.get("ads") or [] if isinstance(a, dict)]
+    if not kind or not ads:
+        raise MarktplaatsError("Kies een actie en minstens één advertentie.")
+    return jsonify({"queued": len(worker.enqueue_many(kind, ads))})
 
 
 @app.post("/api/ads/<item_id>/delete")
@@ -429,32 +429,36 @@ def healthz():
     return Response("ok", mimetype="text/plain")
 
 
-def adopt_mpwatcher_telegram():
-    """A taken-over MPWatcher database brings its Telegram bot; use it if MPManager has none."""
-    token, chats = watch_api.mpwatcher_telegram()
-    if not token and not chats:
+def take_over_watcher_settings():
+    """
+    Settings that still sit in the search database (from before they moved
+    into the one settings file, or from a taken-over MPWatcher) move over once.
+    The bot token goes to the encrypted state, never to a readable file.
+    """
+    old = watch_api.legacy_settings()
+    if not old:
         return
+    token, chats = str(old.pop("telegram_bot_id", "") or "").strip(), str(old.pop("telegram_chat_id", "") or "").strip()
     if token and not client.secret("telegram_bot_token"):
         client.set_secret("telegram_bot_token", token)
     if chats and not store.settings()["telegram_chat_id"]:
         store.save_settings({"telegram_chat_id": chats})
-    watch_api.forget_mpwatcher_telegram()
-    log("Telegram-bot van MPWatcher overgenomen (token versleuteld bewaard).")
+    store.save_settings({k: v for k, v in old.items() if not store.has_saved(k)})
+    log("Instellingen van de zoekopdrachten overgenomen in het instellingenbestand"
+        + (" (Telegram-token versleuteld bewaard)." if token else "."))
 
 
 def main():
-    import_old_session()
-    encrypt_old_password()
     if client.state_error:
         log(client.state_error)
     s = store.settings()
     log(f"MPManager gestart. Proefmodus {'aan' if s['dry_run'] else 'uit'}, "
-        f"{'ingelogd' if client.has_cookies() else 'nog niet ingelogd op Marktplaats'}.")
+        f"{'ingelogd op ' + client.site_name if client.has_login() else 'nog niet ingelogd'}.")
     if WEB_PASSWORD and placeholder_password():
         log("WEB_PASSWORD is de voorbeeldwaarde: niemand kan inloggen tot je een eigen wachtwoord zet.")
     worker.start()
-    if watch_api.setup(notify.target):
-        log("Zoekwoorden, resultaten en instellingen van MPWatcher overgenomen.")
-    adopt_mpwatcher_telegram()
+    if watch_api.setup():
+        log("Zoekwoorden en resultaten van MPWatcher overgenomen.")
+    take_over_watcher_settings()
     from waitress import serve
     serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), threads=6)
